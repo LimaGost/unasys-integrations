@@ -27,6 +27,30 @@ export interface IncomingMessage {
 const MAX_BODY_TEXT_LENGTH = 5000;
 const MAX_BODY_HTML_LENGTH = 50000;
 
+// Toda letra acentuada em UTF-8 (2 bytes: 0xC3 + continuacao 0x80-0xBF) vira,
+// se lida como Latin-1/Windows-1252, dois caracteres - sempre comecando por
+// U+00C3 ("A" com til sozinho). Construido por codigo de caractere (nao
+// literal) para nao depender de nenhuma ferramenta no meio do caminho
+// preservar corretamente um acento dentro deste proprio arquivo-fonte.
+const MOJIBAKE_LEAD_CHAR = String.fromCharCode(0xc3);
+const MOJIBAKE_PATTERN = new RegExp(`${MOJIBAKE_LEAD_CHAR}[\\u0080-\\u00bf]`);
+
+/**
+ * Corrige mojibake: acontece quando o sistema que originou o email declara
+ * um charset errado (ex: Windows-1252) no Content-Type, mas o conteudo real
+ * e UTF-8 - visto em emails automaticos antigos ("ImplantaÃ§Ã£o" em vez de
+ * "Implantação"). O mailparser segue fielmente o charset declarado, entao
+ * nao ha como evitar isso no parsing; aqui so detectamos o padrao resultante
+ * e revertemos. So aplica se a correcao NAO gerar caractere de substituicao
+ * (U+FFFD) - sinal de que a entrada nao era esse tipo de mojibake e a
+ * "correcao" so pioraria o texto.
+ */
+function fixMojibake(text: string): string {
+  if (!text || !MOJIBAKE_PATTERN.test(text)) return text;
+  const fixed = Buffer.from(text, "latin1").toString("utf8");
+  return fixed.includes("�") ? text : fixed;
+}
+
 export interface InboxPollResult {
   messages: IncomingMessage[];
   lastUid: number;
@@ -75,7 +99,7 @@ export class InboxReader {
           // a partir do texto puro (ja escapado/com quebras de linha) > vazio.
           // Nunca usar `parsed.text` cru aqui - ele nao tem tags nenhuma, e o
           // Base44 renderiza este campo como HTML (ver EmailIframe.jsx).
-          const bodyHtml = (parsed?.html || parsed?.textAsHtml || "").slice(0, MAX_BODY_HTML_LENGTH);
+          const bodyHtml = fixMojibake((parsed?.html || parsed?.textAsHtml || "").slice(0, MAX_BODY_HTML_LENGTH));
 
           messages.push({
             uid: message.uid,
@@ -83,10 +107,10 @@ export class InboxReader {
             rfcMessageId: envelope?.messageId,
             inReplyTo: envelope?.inReplyTo,
             fromEmail: from?.address ?? "",
-            fromName: from?.name || undefined,
+            fromName: fixMojibake(from?.name || "") || undefined,
             to: (envelope?.to ?? []).map((address) => address.address).filter((address): address is string => Boolean(address)),
-            subject: envelope?.subject ?? "(sem assunto)",
-            bodyText: (parsed?.text ?? "").slice(0, MAX_BODY_TEXT_LENGTH),
+            subject: fixMojibake(envelope?.subject ?? "(sem assunto)"),
+            bodyText: fixMojibake((parsed?.text ?? "").slice(0, MAX_BODY_TEXT_LENGTH)),
             bodyHtml,
           });
         }
