@@ -344,6 +344,36 @@ export const DASHBOARD_HTML = `<!doctype html>
     </div>
 
     <div class="settings-block">
+      <div class="settings-block-head">
+        <h3>Anexos do Ticket (Base44)</h3>
+        <span class="pill" id="attachmentsStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Token exclusivo usado para anexar arquivos no Ticket (Novo Registro, Anexos, composer de
+        email) e colar imagens no editor — chama <code>POST /public/uploads/upload</code> direto
+        do navegador do usuario (sem passar por <code>base44.integrations.Core.UploadFile</code>,
+        para nao gastar credito de integracao no Base44). Por ficar visivel no codigo-fonte do
+        frontend do Base44, esse token e separado dos outros e a rota so aceita chamadas vindas do
+        dominio do app. Arquivos ficam salvos em <code>data/uploads</code> nesta VPS.
+      </p>
+      <div class="token-row">
+        <span class="token-label">URL</span>
+        <input type="text" id="urlAttachments" readonly>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Token</span>
+        <input type="text" id="tokenAttachments" readonly>
+        <button class="action small" type="button" data-integration="attachments">Gerar novo</button>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Cadastrado em</span>
+        <input type="text" id="noteAttachments" placeholder="ex: Base44 &gt; ActivityPanel.jsx / TicketDetail.jsx / EmailComposerPanel.jsx">
+        <button class="action small" type="button" data-note-integration="attachments">Salvar</button>
+      </div>
+      <div class="action-result" id="attachmentsTokenResult"></div>
+    </div>
+
+    <div class="settings-block">
       <h3>Outras integracoes</h3>
       <p class="settings-desc">
         Cadastre um nome para gerar na hora um endpoint novo (<code>/webhooks/custom/&lt;nome&gt;</code>)
@@ -607,12 +637,17 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenUserDirectory").value = data.webhookTokens.userDirectory.token || "(nao configurado)";
       document.getElementById("noteUserDirectory").value = data.webhookTokens.userDirectory.note || "";
 
+      document.getElementById("urlAttachments").value = origin + "/public/uploads/upload";
+      document.getElementById("tokenAttachments").value = data.webhookTokens.attachments.token || "(nao configurado)";
+      document.getElementById("noteAttachments").value = data.webhookTokens.attachments.note || "";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
       setStatusPill("gmailStatusPill", data.gmail.configured, "pronto", "credenciais pendentes");
       setStatusPill("emailButtonStatusPill", Boolean(data.webhookTokens.emailButton.token), "token configurado", "sem token");
       setStatusPill("userDirectoryStatusPill", Boolean(data.webhookTokens.userDirectory.token), "token configurado", "sem token");
+      setStatusPill("attachmentsStatusPill", Boolean(data.webhookTokens.attachments.token), "token configurado", "sem token");
     }).catch(function () {});
   }
 
@@ -641,7 +676,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     salesData: { token: "tokenSalesData", note: "noteSalesData", result: "salesDataTokenResult", pill: "salesDataStatusPill" },
     gmail: { token: "tokenGmail", note: "noteGmail", result: "gmailTokenResult", pill: null },
     emailButton: { token: "tokenEmailButton", note: "noteEmailButton", result: "emailButtonTokenResult", pill: "emailButtonStatusPill" },
-    userDirectory: { token: "tokenUserDirectory", note: "noteUserDirectory", result: "userDirectoryTokenResult", pill: "userDirectoryStatusPill" }
+    userDirectory: { token: "tokenUserDirectory", note: "noteUserDirectory", result: "userDirectoryTokenResult", pill: "userDirectoryStatusPill" },
+    attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" }
   };
 
   [].forEach.call(document.querySelectorAll("[data-integration]"), function (btn) {

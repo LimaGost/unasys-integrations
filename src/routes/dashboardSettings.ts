@@ -12,7 +12,13 @@ import {
 } from "../services/configStore";
 
 function isWebhookIntegration(value: string): value is WebhookIntegration {
-  return value === "salesData" || value === "gmail" || value === "emailButton" || value === "userDirectory";
+  return (
+    value === "salesData" ||
+    value === "gmail" ||
+    value === "emailButton" ||
+    value === "userDirectory" ||
+    value === "attachments"
+  );
 }
 
 const router = Router();
@@ -41,6 +47,7 @@ router.get("/", (_req: Request, res: Response) => {
       gmail: { token: config.webhookTokens.gmail.token ?? null, note: config.webhookTokens.gmail.note ?? "" },
       emailButton: { token: config.webhookTokens.emailButton.token ?? null, note: config.webhookTokens.emailButton.note ?? "" },
       userDirectory: { token: config.webhookTokens.userDirectory.token ?? null, note: config.webhookTokens.userDirectory.note ?? "" },
+      attachments: { token: config.webhookTokens.attachments.token ?? null, note: config.webhookTokens.attachments.note ?? "" },
     },
     customIntegrations: config.customIntegrations.map((integration) => ({
       slug: integration.slug,
@@ -88,7 +95,10 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const integration = req.params.integration ?? "";
     if (!isWebhookIntegration(integration)) {
-      res.status(400).json({ error: "BadRequest", message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton' ou 'userDirectory'." });
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory' ou 'attachments'.",
+      });
       return;
     }
 
@@ -103,7 +113,10 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const integration = req.params.integration ?? "";
     if (!isWebhookIntegration(integration)) {
-      res.status(400).json({ error: "BadRequest", message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton' ou 'userDirectory'." });
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory' ou 'attachments'.",
+      });
       return;
     }
 

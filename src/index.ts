@@ -7,6 +7,7 @@ import customIntegrationsRouter from "./routes/customIntegrations";
 import dashboardRouter from "./routes/dashboard";
 import gmailRouter, { runGmailPoll } from "./routes/gmail";
 import publicEmailSendRouter from "./routes/publicEmailSend";
+import publicUploadsRouter, { UPLOADS_DIR } from "./routes/publicUploads";
 import publicUsersRouter from "./routes/publicUsers";
 import salesDataRouter from "./routes/salesData";
 import { authenticateBase44Client } from "./services/base44Client";
@@ -15,6 +16,15 @@ import { emailService } from "./container";
 import type { HealthCheckResponse } from "./types";
 
 const app = express();
+
+/**
+ * Roda atras do proxy reverso (Nginx/CloudPanel) - sem isso, req.protocol
+ * sempre reporta "http" (o proxy fala HTTP com o processo Node por dentro),
+ * mesmo quando o cliente usou HTTPS. Isso gerava file_url http:// em
+ * routes/publicUploads.ts, bloqueado como "mixed content" pelo navegador
+ * numa pagina https (o app do Base44).
+ */
+app.set("trust proxy", 1);
 
 app.use(express.json());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
@@ -37,6 +47,8 @@ app.use("/webhooks/sales-data", salesDataRouter);
 app.use("/webhooks/custom", customIntegrationsRouter);
 app.use("/public/email", publicEmailSendRouter);
 app.use("/public/users", publicUsersRouter);
+app.use("/public/uploads", publicUploadsRouter);
+app.use("/uploads", express.static(UPLOADS_DIR, { maxAge: "365d", index: false }));
 app.use("/dashboard", dashboardRouter);
 
 app.use((_req, res) => {

@@ -53,6 +53,13 @@ export interface StoredConfig {
      * token proprio, nao reaproveita os outros.
      */
     userDirectory: WebhookTokenEntry;
+    /**
+     * Token exclusivo do upload de anexos (Novo Registro / Anexos do Ticket /
+     * composer de email, no Base44), chamado DIRETO do navegador do usuario
+     * contra POST /public/uploads/upload - mesma logica do emailButton, para
+     * nao gastar credito de integracao no Base44.Core.UploadFile.
+     */
+    attachments: WebhookTokenEntry;
   };
   customIntegrations: CustomIntegration[];
 }
@@ -77,6 +84,7 @@ function migrateLegacyConfig(legacy: LegacyStoredConfig): StoredConfig {
       gmail: { token: legacy.webhookTokens.gmail },
       emailButton: {},
       userDirectory: {},
+      attachments: {},
     },
     customIntegrations: legacy.customIntegrations ?? [],
   };
@@ -91,6 +99,10 @@ function backfillNewWebhookTokens(config: StoredConfig): boolean {
   }
   if (!config.webhookTokens.userDirectory) {
     config.webhookTokens.userDirectory = {};
+    changed = true;
+  }
+  if (!config.webhookTokens.attachments) {
+    config.webhookTokens.attachments = {};
     changed = true;
   }
   return changed;
@@ -123,6 +135,7 @@ function seedFromEnv(): StoredConfig {
       gmail: { token: env.webhookTokens.gmail },
       emailButton: {},
       userDirectory: {},
+      attachments: {},
     },
     customIntegrations: [],
   };
@@ -195,7 +208,7 @@ export async function setGmailCredentials(
   });
 }
 
-export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory";
+export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory" | "attachments";
 
 export async function regenerateWebhookToken(integration: WebhookIntegration): Promise<string> {
   const token = generateToken();
