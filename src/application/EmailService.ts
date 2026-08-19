@@ -207,7 +207,7 @@ export class EmailService {
       const ticketEmail = await this.ticketEmails.create({
         ticket_id: ticketId,
         subject: message.subject,
-        body: message.bodyText,
+        body: message.bodyHtml,
         from_email: message.fromEmail,
         from_name: message.fromName,
         to: message.to,
