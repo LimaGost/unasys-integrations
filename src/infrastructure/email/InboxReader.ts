@@ -25,7 +25,26 @@ export interface IncomingMessage {
 }
 
 const MAX_BODY_TEXT_LENGTH = 5000;
-const MAX_BODY_HTML_LENGTH = 50000;
+// Alto de proposito: o corte so deveria acontecer em casos patologicos de
+// verdade. Um corte cedo demais corta NO MEIO de uma tag HTML (ver
+// stripBrokenDataUriImages abaixo) e derruba silenciosamente tudo que vinha
+// depois no email - foi exatamente o que aconteceu com um corte de 50.000.
+const MAX_BODY_HTML_LENGTH = 300000;
+
+/**
+ * Remove `<img src="data:...">` cujo tipo declarado na propria data URI NAO
+ * e uma imagem - nunca poderia ter renderizado (o navegador so trata
+ * `data:image/*` como imagem; qualquer outro tipo vira icone de imagem
+ * quebrada). Bug real visto num email do Outlook Web App: quando o proxy de
+ * imagem da assinatura falha, as vezes ele embute a PROPRIA PAGINA HTML de
+ * erro/login do OWA (200KB+) como se fosse o "src" da imagem da logo.
+ * Alem de nunca aparecer, isso sozinho ja estourava o limite de tamanho do
+ * corpo, cortando o email ao meio e descartando tudo que vinha depois
+ * (o e-mail citado, por exemplo) - por isso remover ANTES de truncar.
+ */
+function stripBrokenDataUriImages(html: string): string {
+  return html.replace(/<img\b[^>]*\bsrc\s*=\s*"data:(?!image\/)[^"]*"[^>]*>/gi, "");
+}
 
 // Toda letra acentuada em UTF-8 (2 bytes: 0xC3 + continuacao 0x80-0xBF) vira,
 // se lida como Latin-1/Windows-1252, dois caracteres - sempre comecando por
@@ -99,7 +118,10 @@ export class InboxReader {
           // a partir do texto puro (ja escapado/com quebras de linha) > vazio.
           // Nunca usar `parsed.text` cru aqui - ele nao tem tags nenhuma, e o
           // Base44 renderiza este campo como HTML (ver EmailIframe.jsx).
-          const bodyHtml = fixMojibake((parsed?.html || parsed?.textAsHtml || "").slice(0, MAX_BODY_HTML_LENGTH));
+          // A ordem importa: remover o lixo ANTES de truncar, senao o corte
+          // pode cair no meio do proprio lixo e descartar conteudo real.
+          const bodyHtmlRaw = stripBrokenDataUriImages(parsed?.html || parsed?.textAsHtml || "");
+          const bodyHtml = fixMojibake(bodyHtmlRaw.slice(0, MAX_BODY_HTML_LENGTH));
 
           messages.push({
             uid: message.uid,
