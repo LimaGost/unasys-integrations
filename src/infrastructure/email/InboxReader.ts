@@ -1,5 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import { env } from "../../config/env";
+import { saveUploadedFile } from "../../services/uploadStorage";
 import { requireEmailAccount } from "./EmailAccount";
 
 export interface IncomingMessage {
@@ -25,11 +27,17 @@ export interface IncomingMessage {
 }
 
 const MAX_BODY_TEXT_LENGTH = 5000;
-// Alto de proposito: o corte so deveria acontecer em casos patologicos de
-// verdade. Um corte cedo demais corta NO MEIO de uma tag HTML (ver
-// stripBrokenDataUriImages abaixo) e derruba silenciosamente tudo que vinha
-// depois no email - foi exatamente o que aconteceu com um corte de 50.000.
-const MAX_BODY_HTML_LENGTH = 300000;
+// Rede de seguranca, nao o mecanismo principal de controle de tamanho -
+// imagens embutidas (a fonte real de corpos gigantes) sao extraidas para
+// arquivo por extractInlineImages ANTES deste corte (ver abaixo). Um corte
+// cedo demais corta NO MEIO de uma imagem em base64 e derruba silenciosamente
+// tudo que vinha depois no email - foi o bug visto duas vezes: uma com uma
+// imagem de assinatura quebrada do Outlook (200KB+), outra com um screenshot
+// de verdade colado na resposta (que so foi resolvido extraindo a imagem,
+// nao aumentando o limite - nao existe limite alto o suficiente para uma
+// imagem que pode crescer sem fim).
+const MAX_BODY_HTML_LENGTH = 100000;
+const MAX_INLINE_IMAGE_BYTES = 15 * 1024 * 1024;
 
 /**
  * Remove `<img src="data:...">` cujo tipo declarado na propria data URI NAO
@@ -38,12 +46,47 @@ const MAX_BODY_HTML_LENGTH = 300000;
  * quebrada). Bug real visto num email do Outlook Web App: quando o proxy de
  * imagem da assinatura falha, as vezes ele embute a PROPRIA PAGINA HTML de
  * erro/login do OWA (200KB+) como se fosse o "src" da imagem da logo.
- * Alem de nunca aparecer, isso sozinho ja estourava o limite de tamanho do
- * corpo, cortando o email ao meio e descartando tudo que vinha depois
- * (o e-mail citado, por exemplo) - por isso remover ANTES de truncar.
  */
 function stripBrokenDataUriImages(html: string): string {
   return html.replace(/<img\b[^>]*\bsrc\s*=\s*"data:(?!image\/)[^"]*"[^>]*>/gi, "");
+}
+
+const INLINE_IMAGE_PATTERN = /data:image\/(png|jpe?g|gif|webp|bmp);base64,([a-zA-Z0-9+/=]+)/gi;
+
+/**
+ * Substitui imagens embutidas em base64 (comum ao colar um screenshot numa
+ * resposta) por um arquivo salvo em disco + URL publica, usando o mesmo
+ * armazenamento do upload de anexos do Ticket. Uma imagem de celular pode
+ * facilmente passar de 1-2MB em base64 - mante-la inline no HTML e o que
+ * fazia o corpo estourar QUALQUER limite de tamanho razoavel, cortando a
+ * mensagem no meio da propria imagem e descartando o texto que vinha
+ * depois (incluida a resposta da pessoa). Extrair a imagem resolve os dois
+ * problemas de uma vez: o corpo fica pequeno E a imagem continua acessivel
+ * (como uma URL normal, em vez de um blob gigante dentro do HTML).
+ */
+async function extractInlineImages(html: string): Promise<string> {
+  const matches = [...html.matchAll(INLINE_IMAGE_PATTERN)];
+  if (matches.length === 0) return html;
+
+  let result = html;
+  for (const match of matches) {
+    const fullMatch = match[0];
+    const subtype = match[1] ?? "png";
+    const base64Data = match[2] ?? "";
+    if (!result.includes(fullMatch)) continue; // ja substituido (mesma imagem repetida no email)
+
+    const buffer = Buffer.from(base64Data, "base64");
+    if (buffer.length > MAX_INLINE_IMAGE_BYTES) {
+      result = result.split(fullMatch).join("");
+      continue;
+    }
+
+    const extension = subtype.toLowerCase() === "jpg" ? ".jpeg" : `.${subtype.toLowerCase()}`;
+    const filename = await saveUploadedFile(buffer, extension);
+    const url = `${env.publicBaseUrl}/uploads/${filename}`;
+    result = result.split(fullMatch).join(url);
+  }
+  return result;
 }
 
 // Toda letra acentuada em UTF-8 (2 bytes: 0xC3 + continuacao 0x80-0xBF) vira,
@@ -118,10 +161,12 @@ export class InboxReader {
           // a partir do texto puro (ja escapado/com quebras de linha) > vazio.
           // Nunca usar `parsed.text` cru aqui - ele nao tem tags nenhuma, e o
           // Base44 renderiza este campo como HTML (ver EmailIframe.jsx).
-          // A ordem importa: remover o lixo ANTES de truncar, senao o corte
-          // pode cair no meio do proprio lixo e descartar conteudo real.
-          const bodyHtmlRaw = stripBrokenDataUriImages(parsed?.html || parsed?.textAsHtml || "");
-          const bodyHtml = fixMojibake(bodyHtmlRaw.slice(0, MAX_BODY_HTML_LENGTH));
+          // Ordem importa: 1) remove lixo que nunca renderizava, 2) extrai
+          // imagens de verdade pra arquivo (a fonte real de corpos gigantes),
+          // 3) so ENTAO trunca - a essa altura o corpo deveria ser so texto.
+          const withoutBrokenImages = stripBrokenDataUriImages(parsed?.html || parsed?.textAsHtml || "");
+          const withHostedImages = await extractInlineImages(withoutBrokenImages);
+          const bodyHtml = fixMojibake(withHostedImages.slice(0, MAX_BODY_HTML_LENGTH));
 
           messages.push({
             uid: message.uid,

@@ -1,10 +1,11 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
-import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { getConfig } from "../services/configStore";
+import { UPLOADS_DIR, saveUploadedFile, safeExtension } from "../services/uploadStorage";
+
+export { UPLOADS_DIR };
 
 const router = Router();
 
@@ -21,7 +22,6 @@ const router = Router();
 const ALLOWED_ORIGINS = ["https://unasystickets.base44.app", "https://preview--unasystickets.base44.app"];
 const TOKEN_HEADER = "x-app-token";
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-export const UPLOADS_DIR = path.join(process.cwd(), "data", "uploads");
 
 function applyCors(req: Request, res: Response): boolean {
   const origin = req.header("origin");
@@ -60,12 +60,6 @@ function tokensMatch(provided: string, expected: string): boolean {
   const expectedBuf = Buffer.from(expected);
   if (providedBuf.length !== expectedBuf.length) return false;
   return timingSafeEqual(providedBuf, expectedBuf);
-}
-
-/** Extensao original preservada (p/ o navegador reconhecer o tipo); nome do arquivo em si e sempre um UUID novo - nunca confia no nome enviado pelo cliente. */
-function safeExtension(originalName: string): string {
-  const ext = path.extname(originalName || "").toLowerCase();
-  return /^\.[a-z0-9]{1,10}$/.test(ext) ? ext : "";
 }
 
 const upload = multer({
@@ -117,9 +111,7 @@ router.post(
         return;
       }
 
-      await mkdir(UPLOADS_DIR, { recursive: true });
-      const filename = `${randomUUID()}${safeExtension(file.originalname)}`;
-      await writeFile(path.join(UPLOADS_DIR, filename), file.buffer);
+      const filename = await saveUploadedFile(file.buffer, safeExtension(file.originalname));
 
       const origin = `${req.protocol}://${req.get("host")}`;
       res.status(200).json({ file_url: `${origin}/uploads/${filename}` });

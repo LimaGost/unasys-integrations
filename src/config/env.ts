@@ -37,6 +37,14 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 export interface EnvConfig {
   nodeEnv: "development" | "production" | "test";
   port: number;
+  /**
+   * Base publica deste servico (usada para montar URLs de arquivo, ex:
+   * imagens embutidas em email recebido - ver infrastructure/email/InboxReader.ts).
+   * Rotas HTTP normais montam a URL a partir do proprio request
+   * (req.protocol + req.get("host")), mas o poller do Gmail roda fora de
+   * qualquer request, entao precisa de um valor fixo configurado.
+   */
+  publicBaseUrl: string;
   base44: {
     appId: string;
     serviceEmail: string;
@@ -92,6 +100,7 @@ function loadEnv(): EnvConfig {
   return {
     nodeEnv,
     port: parsePort(process.env.PORT),
+    publicBaseUrl: optionalEnv("PUBLIC_BASE_URL") ?? "https://integracoes.unasyshub.com.br",
     base44: {
       appId: requireEnv("BASE44_APP_ID"),
       serviceEmail: requireEnv("BASE44_SERVICE_ACCOUNT_EMAIL"),
