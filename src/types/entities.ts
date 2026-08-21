@@ -44,7 +44,9 @@ export type TicketRecord = Ticket & Base44ServerFields;
  */
 export interface Client {
   nome_fantasia: string;
+  razao_social?: string;
   cnpj?: string;
+  cnae?: string;
   email?: string;
   empresa?: string;
   telefone?: string;

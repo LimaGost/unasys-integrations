@@ -23,9 +23,11 @@ router.post(
   "/test-sales-data",
   asyncHandler(async (_req: Request, res: Response) => {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    // CNPJ de teste valido (digitos verificadores corretos) - a validacao de
+    // CNPJ real rejeitaria um placeholder como "00.000.000/0001-00".
     const result = await processSalesPayload({
       order_number: `TESTE-PAINEL-${stamp}`,
-      customer_code: "00.000.000/0001-00",
+      cnpj: "11.222.333/0001-81",
       client_name: "Teste via Painel",
       client_email: undefined,
       vertical: "retail",

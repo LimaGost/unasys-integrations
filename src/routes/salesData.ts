@@ -11,19 +11,99 @@ const router = Router();
 
 router.use(requireWebhookToken(() => getConfig().webhookTokens.salesData.token));
 
-export function isValidSalesPayload(body: unknown): body is UnasysFlowSalesPayload {
-  const payload = body as Partial<UnasysFlowSalesPayload> | null;
-  return Boolean(
-    payload &&
-      typeof payload.order_number === "string" &&
-      payload.order_number.length > 0 &&
-      typeof payload.customer_code === "string" &&
-      payload.customer_code.length > 0 &&
-      typeof payload.client_name === "string" &&
-      payload.client_name.length > 0 &&
-      typeof payload.vertical === "string" &&
-      payload.vertical.length > 0
-  );
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Valida CNPJ com o algoritmo oficial (digitos verificadores) - portado de
+ * `receiveSalesData` (function equivalente hospedada no Base44), que tem
+ * essa validacao porque o Unasys Flow real manda CNPJ nesse campo.
+ */
+function validarCNPJ(cnpj: string): { ok: boolean; nums: string } {
+  const n = (cnpj || "").replace(/\D/g, "");
+  if (n.length !== 14 || /^(\d)\1{13}$/.test(n)) return { ok: false, nums: n };
+  const calc = (len: number): number => {
+    let sum = 0;
+    let pos = len - 7;
+    for (let i = len; i >= 1; i--) {
+      sum += parseInt(n[len - i] as string, 10) * pos--;
+      if (pos < 2) pos = 9;
+    }
+    const r = sum % 11;
+    return r < 2 ? 0 : 11 - r;
+  };
+  const ok = calc(12) === parseInt(n[12] as string, 10) && calc(13) === parseInt(n[13] as string, 10);
+  return { ok, nums: n };
+}
+
+function formatCNPJ(nums: string): string {
+  return `${nums.slice(0, 2)}.${nums.slice(2, 5)}.${nums.slice(5, 8)}/${nums.slice(8, 12)}-${nums.slice(12)}`;
+}
+
+/**
+ * Aceita o payload no formato real confirmado do Unasys Flow (nomes em
+ * portugues: numero_op, cnpj_cliente, nome_cliente...) E no formato em
+ * ingles assumido antes de confirmar (order_number, customer_code como
+ * CNPJ...), para o caso de algum lado ainda estar configurado com o nome
+ * antigo. Retorna `null` se faltar campo obrigatorio ou o CNPJ for invalido -
+ * o motivo exato vai no `error` para aparecer na resposta 400.
+ */
+export function normalizeSalesPayload(body: unknown): { payload: UnasysFlowSalesPayload } | { error: string } {
+  const raw = (body ?? {}) as Record<string, unknown>;
+
+  const order_number = readString(raw.numero_op) ?? readString(raw.order_number);
+  // Formato antigo (ingles) usava "customer_code" para o CNPJ - mantido aqui
+  // so para nao quebrar se alguem ainda estiver mandando nesse formato.
+  const cnpjRaw = readString(raw.cnpj_cliente) ?? readString(raw.customer_code);
+  const client_name = readString(raw.nome_cliente) ?? readString(raw.client_name);
+  const client_email = readString(raw.email_cliente) ?? readString(raw.client_email);
+  const customer_code = readString(raw.numero_cliente);
+  const vertical = readString(raw.vertical);
+  const observacoes =
+    readString(raw.observacoes) ??
+    readString(raw.observacao) ??
+    readString(raw.obs) ??
+    readString(raw.observacoes_gerais) ??
+    readString(raw.observacoes_proposta);
+  const nome_fantasia = readString(raw.nome_fantasia);
+  const razao_social = readString(raw.razao_social);
+  const cnae = readString(raw.cnae);
+  const telefone = readString(raw.telefone);
+  const modulos = Array.isArray(raw.modulos)
+    ? raw.modulos.filter((m): m is string => typeof m === "string")
+    : undefined;
+
+  const missing: string[] = [];
+  if (!order_number) missing.push("numero_op");
+  if (!cnpjRaw) missing.push("cnpj_cliente");
+  if (!client_name) missing.push("nome_cliente");
+  if (!vertical) missing.push("vertical");
+  if (missing.length > 0) {
+    return { error: `Campos obrigatorios ausentes: ${missing.join(", ")}.` };
+  }
+
+  const { ok, nums } = validarCNPJ(cnpjRaw as string);
+  if (!ok) {
+    return { error: `CNPJ invalido: "${cnpjRaw}". Verifique os digitos verificadores.` };
+  }
+
+  return {
+    payload: {
+      order_number: order_number as string,
+      cnpj: formatCNPJ(nums),
+      client_name: client_name as string,
+      client_email,
+      customer_code,
+      vertical: vertical as string,
+      nome_fantasia,
+      razao_social,
+      cnae,
+      telefone,
+      modulos,
+      observacoes,
+    },
+  };
 }
 
 export interface ProcessSalesResult {
@@ -43,8 +123,10 @@ export async function processSalesPayload(payload: UnasysFlowSalesPayload): Prom
     const entities = getEntities(client);
     const { Ticket, TicketEvent } = entities;
 
-    const existing = await Ticket.filter({ external_order_number: payload.order_number }, undefined, 1);
-    const existingTicket = existing[0];
+    // Duplicata = mesma OP E mesmo CNPJ (nao so a OP): uma franquia pode ter
+    // varias filiais na mesma OP, cada uma com um Ticket proprio.
+    const existingByOrder = await Ticket.filter({ external_order_number: payload.order_number });
+    const existingTicket = existingByOrder.find((t) => (t.external_reference || "") === payload.cnpj);
 
     if (existingTicket) {
       const updated = await Ticket.update(existingTicket.id, {
@@ -68,11 +150,14 @@ export async function processSalesPayload(payload: UnasysFlowSalesPayload): Prom
 
     const clientRecord = await findOrCreateClient(
       entities,
-      { cnpj: payload.customer_code, email: payload.client_email },
+      { cnpj: payload.cnpj, email: payload.client_email },
       {
-        nome_fantasia: payload.client_name,
-        cnpj: payload.customer_code,
+        nome_fantasia: payload.nome_fantasia || payload.client_name,
+        razao_social: payload.razao_social || payload.client_name,
+        cnpj: payload.cnpj,
+        cnae: payload.cnae,
         email: payload.client_email,
+        telefone: payload.telefone,
         vertical,
       }
     );
@@ -91,7 +176,8 @@ export async function processSalesPayload(payload: UnasysFlowSalesPayload): Prom
       modulos: payload.modulos,
       observacoes_gerais: payload.observacoes,
       external_order_number: payload.order_number,
-      external_customer_code: payload.customer_code,
+      external_customer_code: payload.customer_code || payload.cnpj,
+      external_reference: payload.cnpj,
       external_system: "unasys_flow",
       // Sem isto, o ticket existe no banco mas nao aparece em nenhuma
       // coluna do quadro Kanban do Unasys Tickets.
@@ -114,15 +200,13 @@ export async function processSalesPayload(payload: UnasysFlowSalesPayload): Prom
 router.post(
   "/receive",
   asyncHandler(async (req: Request, res: Response) => {
-    if (!isValidSalesPayload(req.body)) {
-      res.status(400).json({
-        error: "BadRequest",
-        message: "Campos obrigatorios ausentes ou invalidos: order_number, customer_code, client_name, vertical.",
-      });
+    const normalized = normalizeSalesPayload(req.body);
+    if ("error" in normalized) {
+      res.status(400).json({ error: "BadRequest", message: normalized.error });
       return;
     }
 
-    const result = await processSalesPayload(req.body);
+    const result = await processSalesPayload(normalized.payload);
     res.status(result.status).json({ ticket_id: result.ticketId });
   })
 );
