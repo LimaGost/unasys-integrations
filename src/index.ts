@@ -13,7 +13,7 @@ import publicUsersRouter from "./routes/publicUsers";
 import salesDataRouter from "./routes/salesData";
 import { authenticateBase44Client } from "./services/base44Client";
 import { loadConfigStore } from "./services/configStore";
-import { emailService } from "./container";
+import { emailService, slaAutomationService } from "./container";
 import type { HealthCheckResponse } from "./types";
 
 const app = express();
@@ -98,12 +98,50 @@ function startGmailPoller(): void {
   }, intervalMs);
 }
 
+/**
+ * Substitui as automacoes agendadas "Verificar SLA e Executar Regras" e
+ * "Verificar SLA Estourado e Notificar" (30 em 30 min) que existiam no
+ * Base44 - roda sempre (nao depende de nenhuma config externa, so dos dados
+ * do proprio Base44 via SDK).
+ */
+function startSlaChecker(): void {
+  const intervalMs = env.sla.checkIntervalMinutes * 60 * 1000;
+  console.log(`[sla] verificacao de SLA agendada a cada ${env.sla.checkIntervalMinutes} min.`);
+
+  setInterval(() => {
+    slaAutomationService
+      .checkSlaAndAutomation()
+      .then((summary) => {
+        if (summary.slaWarnings > 0 || summary.timeoutWarnings > 0) {
+          console.log(
+            `[sla] regras executadas: ${summary.slaWarnings} aviso(s) de SLA, ${summary.timeoutWarnings} timeout(s) de resposta (${summary.ticketsChecked} tickets verificados).`
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[sla] falha ao executar regras de automacao:", error instanceof Error ? error.message : error);
+      });
+
+    slaAutomationService
+      .checkSlaBreached()
+      .then((summary) => {
+        if (summary.notified > 0) {
+          console.log(`[sla] SLA estourado: ${summary.notified} notificacao(oes) enviada(s) (${summary.ticketsChecked} tickets verificados).`);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[sla] falha ao verificar SLA estourado:", error instanceof Error ? error.message : error);
+      });
+  }, intervalMs);
+}
+
 Promise.all([loadConfigStore(), authenticateBase44Client()])
   .then(() => {
     app.listen(env.port, () => {
       console.log(`unasys-integrations rodando na porta ${env.port} (${env.nodeEnv})`);
     });
     startGmailPoller();
+    startSlaChecker();
   })
   .catch((error: unknown) => {
     console.error("Falha ao inicializar o servidor:", error);

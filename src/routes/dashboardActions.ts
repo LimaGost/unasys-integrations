@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { emailService } from "../container";
+import { emailService, slaAutomationService } from "../container";
 import { currentEmailUser } from "../infrastructure/email/EmailAccount";
 import { processSalesPayload } from "./salesData";
 import { runGmailPoll } from "./gmail";
@@ -77,6 +77,30 @@ router.post(
     });
 
     res.status(200).json({ message: `Email de teste enviado para ${gmailUser}.` });
+  })
+);
+
+/** Forca uma verificacao imediata de regras de automacao (SLA warning + no_response_timeout). */
+router.post(
+  "/sla-check",
+  asyncHandler(async (_req: Request, res: Response) => {
+    const summary = await slaAutomationService.checkSlaAndAutomation();
+    res.status(200).json({
+      message: `${summary.ticketsChecked} ticket(s) verificado(s), ${summary.slaWarnings} aviso(s) de SLA, ${summary.timeoutWarnings} timeout(s) de resposta.`,
+      ...summary,
+    });
+  })
+);
+
+/** Forca uma verificacao imediata de SLA estourado. */
+router.post(
+  "/sla-breached-check",
+  asyncHandler(async (_req: Request, res: Response) => {
+    const summary = await slaAutomationService.checkSlaBreached();
+    res.status(200).json({
+      message: `${summary.ticketsChecked} ticket(s) verificado(s), ${summary.notified} notificacao(oes) enviada(s).`,
+      ...summary,
+    });
   })
 );
 

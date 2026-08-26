@@ -1,5 +1,16 @@
 import type { Base44Client, EntityHandler } from "@base44/sdk";
-import type { Client, ClientRecord, SyncStateRecord, TicketEmailRecord, TicketEventRecord, TicketRecord } from "../types/entities";
+import type {
+  AutomationRuleRecord,
+  Client,
+  ClientRecord,
+  KanbanConfigRecord,
+  NotificationConfigRecord,
+  NotificationRecord,
+  SyncStateRecord,
+  TicketEmailRecord,
+  TicketEventRecord,
+  TicketRecord,
+} from "../types/entities";
 
 /**
  * Coluna Kanban onde novos tickets entram. Confirmada comparando com a
@@ -40,6 +51,10 @@ export interface Base44Entities {
   TicketEvent: EntityHandler<TicketEventRecord>;
   SyncState: EntityHandler<SyncStateRecord>;
   Client: EntityHandler<ClientRecord>;
+  AutomationRule: EntityHandler<AutomationRuleRecord>;
+  Notification: EntityHandler<NotificationRecord>;
+  NotificationConfig: EntityHandler<NotificationConfigRecord>;
+  KanbanConfig: EntityHandler<KanbanConfigRecord>;
 }
 
 /**
@@ -54,6 +69,10 @@ export function getEntities(client: Base44Client): Base44Entities {
     TicketEvent: client.entities.TicketEvent as unknown as EntityHandler<TicketEventRecord>,
     SyncState: client.entities.SyncState as unknown as EntityHandler<SyncStateRecord>,
     Client: client.entities.Client as unknown as EntityHandler<ClientRecord>,
+    AutomationRule: client.entities.AutomationRule as unknown as EntityHandler<AutomationRuleRecord>,
+    Notification: client.entities.Notification as unknown as EntityHandler<NotificationRecord>,
+    NotificationConfig: client.entities.NotificationConfig as unknown as EntityHandler<NotificationConfigRecord>,
+    KanbanConfig: client.entities.KanbanConfig as unknown as EntityHandler<KanbanConfigRecord>,
   };
 }
 

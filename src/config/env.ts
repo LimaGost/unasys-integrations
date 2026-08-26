@@ -92,6 +92,10 @@ export interface EnvConfig {
     user: string | undefined;
     password: string | undefined;
   };
+  sla: {
+    /** Intervalo (em minutos) entre verificacoes de SLA (aviso + estourado). Mesmo valor usado pelas 2 automacoes "Every 30 minutes" que existiam no Base44. */
+    checkIntervalMinutes: number;
+  };
 }
 
 function loadEnv(): EnvConfig {
@@ -119,6 +123,9 @@ function loadEnv(): EnvConfig {
     dashboard: {
       user: optionalEnv("DASHBOARD_USER"),
       password: optionalEnv("DASHBOARD_PASSWORD"),
+    },
+    sla: {
+      checkIntervalMinutes: parsePositiveInt(process.env.SLA_CHECK_INTERVAL_MINUTES, 30),
     },
   };
 }
