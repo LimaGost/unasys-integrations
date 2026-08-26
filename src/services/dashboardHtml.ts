@@ -374,6 +374,34 @@ export const DASHBOARD_HTML = `<!doctype html>
     </div>
 
     <div class="settings-block">
+      <div class="settings-block-head">
+        <h3>Telas de status de email (Base44)</h3>
+        <span class="pill" id="emailAdminStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Token exclusivo usado pelas telas EmailConfigStatus.jsx / EmailAutomationConfig.jsx no
+        Base44 - so leitura de status e acoes ja existentes aqui (verificar caixa de entrada agora,
+        enviar email de teste). Nao configura Gmail nem frequencia: isso e feito uma unica vez
+        acima (secao "Contas de email") ou no <code>.env</code> (<code>GMAIL_POLL_INTERVAL_MINUTES</code>).
+      </p>
+      <div class="token-row">
+        <span class="token-label">URL base</span>
+        <input type="text" id="urlEmailAdmin" readonly>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Token</span>
+        <input type="text" id="tokenEmailAdmin" readonly>
+        <button class="action small" type="button" data-integration="emailAdmin">Gerar novo</button>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Cadastrado em</span>
+        <input type="text" id="noteEmailAdmin" placeholder="ex: Base44 &gt; EmailConfigStatus.jsx / EmailAutomationConfig.jsx">
+        <button class="action small" type="button" data-note-integration="emailAdmin">Salvar</button>
+      </div>
+      <div class="action-result" id="emailAdminTokenResult"></div>
+    </div>
+
+    <div class="settings-block">
       <h3>Outras integracoes</h3>
       <p class="settings-desc">
         Cadastre um nome para gerar na hora um endpoint novo (<code>/webhooks/custom/&lt;nome&gt;</code>)
@@ -641,6 +669,10 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenAttachments").value = data.webhookTokens.attachments.token || "(nao configurado)";
       document.getElementById("noteAttachments").value = data.webhookTokens.attachments.note || "";
 
+      document.getElementById("urlEmailAdmin").value = origin + "/public/email-admin";
+      document.getElementById("tokenEmailAdmin").value = data.webhookTokens.emailAdmin.token || "(nao configurado)";
+      document.getElementById("noteEmailAdmin").value = data.webhookTokens.emailAdmin.note || "";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
@@ -648,6 +680,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       setStatusPill("emailButtonStatusPill", Boolean(data.webhookTokens.emailButton.token), "token configurado", "sem token");
       setStatusPill("userDirectoryStatusPill", Boolean(data.webhookTokens.userDirectory.token), "token configurado", "sem token");
       setStatusPill("attachmentsStatusPill", Boolean(data.webhookTokens.attachments.token), "token configurado", "sem token");
+      setStatusPill("emailAdminStatusPill", Boolean(data.webhookTokens.emailAdmin.token), "token configurado", "sem token");
     }).catch(function () {});
   }
 
@@ -677,7 +710,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     gmail: { token: "tokenGmail", note: "noteGmail", result: "gmailTokenResult", pill: null },
     emailButton: { token: "tokenEmailButton", note: "noteEmailButton", result: "emailButtonTokenResult", pill: "emailButtonStatusPill" },
     userDirectory: { token: "tokenUserDirectory", note: "noteUserDirectory", result: "userDirectoryTokenResult", pill: "userDirectoryStatusPill" },
-    attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" }
+    attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" },
+    emailAdmin: { token: "tokenEmailAdmin", note: "noteEmailAdmin", result: "emailAdminTokenResult", pill: "emailAdminStatusPill" }
   };
 
   [].forEach.call(document.querySelectorAll("[data-integration]"), function (btn) {

@@ -60,6 +60,14 @@ export interface StoredConfig {
      * nao gastar credito de integracao no Base44.Core.UploadFile.
      */
     attachments: WebhookTokenEntry;
+    /**
+     * Token exclusivo das telas de status de email do Base44
+     * (EmailConfigStatus.jsx / EmailAutomationConfig.jsx), chamado DIRETO do
+     * navegador do usuario contra /public/email-admin/* (status, verificar
+     * agora, enviar teste) - mesmo motivo do emailButton/attachments: fica
+     * visivel no frontend, entao token proprio.
+     */
+    emailAdmin: WebhookTokenEntry;
   };
   customIntegrations: CustomIntegration[];
 }
@@ -85,6 +93,7 @@ function migrateLegacyConfig(legacy: LegacyStoredConfig): StoredConfig {
       emailButton: {},
       userDirectory: {},
       attachments: {},
+      emailAdmin: {},
     },
     customIntegrations: legacy.customIntegrations ?? [],
   };
@@ -103,6 +112,10 @@ function backfillNewWebhookTokens(config: StoredConfig): boolean {
   }
   if (!config.webhookTokens.attachments) {
     config.webhookTokens.attachments = {};
+    changed = true;
+  }
+  if (!config.webhookTokens.emailAdmin) {
+    config.webhookTokens.emailAdmin = {};
     changed = true;
   }
   return changed;
@@ -136,6 +149,7 @@ function seedFromEnv(): StoredConfig {
       emailButton: {},
       userDirectory: {},
       attachments: {},
+      emailAdmin: {},
     },
     customIntegrations: [],
   };
@@ -208,7 +222,7 @@ export async function setGmailCredentials(
   });
 }
 
-export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory" | "attachments";
+export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory" | "attachments" | "emailAdmin";
 
 export async function regenerateWebhookToken(integration: WebhookIntegration): Promise<string> {
   const token = generateToken();
