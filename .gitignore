@@ -5,3 +5,7 @@ data/
 *.log
 npm-debug.log*
 .DS_Store
+
+COMO-FUNCIONA.md
+COMO-FUNCIONA-EMAIL.md
+ESTRUTURA-DO-PROJETO.md
