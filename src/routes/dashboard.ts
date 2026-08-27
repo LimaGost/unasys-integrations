@@ -6,6 +6,7 @@ import { emailService } from "../container";
 import { getBase44Status } from "../services/base44Client";
 import { DASHBOARD_HTML } from "../services/dashboardHtml";
 import { getGmailPollStatus } from "../services/gmailStatus";
+import { getSlaStatus } from "../services/slaStatus";
 import dashboardActionsRouter from "./dashboardActions";
 import dashboardSettingsRouter from "./dashboardSettings";
 
@@ -36,6 +37,10 @@ router.get("/api/status", (_req: Request, res: Response) => {
       lastRunAt: gmailPoll.lastRunAt,
       lastProcessed: gmailPoll.lastProcessed,
       lastError: gmailPoll.lastError,
+    },
+    sla: {
+      checkIntervalMinutes: env.sla.checkIntervalMinutes,
+      ...getSlaStatus(),
     },
   });
 });

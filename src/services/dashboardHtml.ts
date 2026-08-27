@@ -165,6 +165,8 @@ export const DASHBOARD_HTML = `<!doctype html>
       <button class="action" id="btnTestSales" type="button">Criar ticket de teste (vendas)</button>
       <button class="action" id="btnGmailPoll" type="button" disabled>Verificar caixa de entrada agora</button>
       <button class="action" id="btnTestGmailSend" type="button" disabled>Enviar email de teste</button>
+      <button class="action" id="btnSlaCheck" type="button">Verificar regras de SLA agora</button>
+      <button class="action" id="btnSlaBreachCheck" type="button">Verificar SLA estourado agora</button>
     </div>
     <div class="action-result" id="actionResult"></div>
   </section>
@@ -475,6 +477,24 @@ export const DASHBOARD_HTML = `<!doctype html>
         : "aguardando GMAIL_APP_PASSWORD",
       cls: data.gmail.configured ? (data.gmail.lastError ? "err-text" : "ok-text") : ""
     });
+    var slaCheck = data.sla.check;
+    stats.push({
+      label: "SLA · Regras",
+      value: slaCheck.lastResult ? (slaCheck.lastResult.slaWarnings + slaCheck.lastResult.timeoutWarnings) + " disparo(s)" : "aguardando 1a execucao",
+      sub: slaCheck.lastError
+        ? ("erro: " + String(slaCheck.lastError).slice(0, 60))
+        : (slaCheck.lastResult ? ("ultima verificacao " + fmtAgo(slaCheck.lastRunAt) + " · " + slaCheck.lastResult.ticketsChecked + " tickets") : ("a cada " + data.sla.checkIntervalMinutes + " min")),
+      cls: slaCheck.lastError ? "err-text" : (slaCheck.lastResult ? "ok-text" : "")
+    });
+    var slaBreach = data.sla.breach;
+    stats.push({
+      label: "SLA · Estourado",
+      value: slaBreach.lastResult ? slaBreach.lastResult.notified + " notificacao(oes)" : "aguardando 1a execucao",
+      sub: slaBreach.lastError
+        ? ("erro: " + String(slaBreach.lastError).slice(0, 60))
+        : (slaBreach.lastResult ? ("ultima verificacao " + fmtAgo(slaBreach.lastRunAt) + " · " + slaBreach.lastResult.ticketsChecked + " tickets") : ("a cada " + data.sla.checkIntervalMinutes + " min")),
+      cls: slaBreach.lastError ? "err-text" : (slaBreach.lastResult ? "ok-text" : "")
+    });
     stats.push({ label: "Uptime", value: Math.floor(data.uptimeSeconds / 60) + " min", sub: "desde o ultimo restart" });
     stats.push({ label: "Memoria", value: data.memoryMb + " MB", sub: "node " + data.nodeVersion });
 
@@ -560,6 +580,12 @@ export const DASHBOARD_HTML = `<!doctype html>
   });
   document.getElementById("btnTestGmailSend").addEventListener("click", function (e) {
     runAction(e.target, "/dashboard/api/actions/test-gmail-send");
+  });
+  document.getElementById("btnSlaCheck").addEventListener("click", function (e) {
+    runAction(e.target, "/dashboard/api/actions/sla-check");
+  });
+  document.getElementById("btnSlaBreachCheck").addEventListener("click", function (e) {
+    runAction(e.target, "/dashboard/api/actions/sla-breached-check");
   });
 
   document.getElementById("btnRefresh").addEventListener("click", function (e) {

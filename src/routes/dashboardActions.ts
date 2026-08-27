@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { emailService, slaAutomationService } from "../container";
+import { emailService } from "../container";
 import { currentEmailUser } from "../infrastructure/email/EmailAccount";
 import { processSalesPayload } from "./salesData";
 import { runGmailPoll } from "./gmail";
+import { runSlaBreachCheck, runSlaCheck } from "./slaChecks";
 
 const router = Router();
 
@@ -84,7 +85,7 @@ router.post(
 router.post(
   "/sla-check",
   asyncHandler(async (_req: Request, res: Response) => {
-    const summary = await slaAutomationService.checkSlaAndAutomation();
+    const summary = await runSlaCheck();
     res.status(200).json({
       message: `${summary.ticketsChecked} ticket(s) verificado(s), ${summary.slaWarnings} aviso(s) de SLA, ${summary.timeoutWarnings} timeout(s) de resposta.`,
       ...summary,
@@ -96,7 +97,7 @@ router.post(
 router.post(
   "/sla-breached-check",
   asyncHandler(async (_req: Request, res: Response) => {
-    const summary = await slaAutomationService.checkSlaBreached();
+    const summary = await runSlaBreachCheck();
     res.status(200).json({
       message: `${summary.ticketsChecked} ticket(s) verificado(s), ${summary.notified} notificacao(oes) enviada(s).`,
       ...summary,

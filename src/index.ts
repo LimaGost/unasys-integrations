@@ -11,9 +11,10 @@ import publicEmailSendRouter from "./routes/publicEmailSend";
 import publicUploadsRouter, { UPLOADS_DIR } from "./routes/publicUploads";
 import publicUsersRouter from "./routes/publicUsers";
 import salesDataRouter from "./routes/salesData";
+import { runSlaBreachCheck, runSlaCheck } from "./routes/slaChecks";
 import { authenticateBase44Client } from "./services/base44Client";
 import { loadConfigStore } from "./services/configStore";
-import { emailService, slaAutomationService } from "./container";
+import { emailService } from "./container";
 import type { HealthCheckResponse } from "./types";
 
 const app = express();
@@ -109,8 +110,7 @@ function startSlaChecker(): void {
   console.log(`[sla] verificacao de SLA agendada a cada ${env.sla.checkIntervalMinutes} min.`);
 
   setInterval(() => {
-    slaAutomationService
-      .checkSlaAndAutomation()
+    runSlaCheck()
       .then((summary) => {
         if (summary.slaWarnings > 0 || summary.timeoutWarnings > 0) {
           console.log(
@@ -122,8 +122,7 @@ function startSlaChecker(): void {
         console.error("[sla] falha ao executar regras de automacao:", error instanceof Error ? error.message : error);
       });
 
-    slaAutomationService
-      .checkSlaBreached()
+    runSlaBreachCheck()
       .then((summary) => {
         if (summary.notified > 0) {
           console.log(`[sla] SLA estourado: ${summary.notified} notificacao(oes) enviada(s) (${summary.ticketsChecked} tickets verificados).`);
