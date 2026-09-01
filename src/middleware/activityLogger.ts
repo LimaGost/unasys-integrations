@@ -29,6 +29,17 @@ function isDashboardReadRoute(req: Request): boolean {
 }
 
 /**
+ * Requisicoes automaticas do navegador (favicon ao abrir o painel, crawlers
+ * batendo em robots.txt) - nao sao acoes reais do sistema, so poluem o feed
+ * de atividade com "erros" de rota inexistente que nao existem de verdade.
+ */
+const BROWSER_NOISE_PATHS = new Set(["/favicon.ico", "/robots.txt"]);
+
+function isBrowserNoiseRoute(req: Request): boolean {
+  return req.method === "GET" && BROWSER_NOISE_PATHS.has(req.path);
+}
+
+/**
  * Registra toda requisicao (metodo, rota, status, duracao e um resumo da
  * resposta) no log de atividade em memoria, para o painel em GET /dashboard.
  */
@@ -38,7 +49,7 @@ export function activityLogger(req: Request, res: Response, next: NextFunction):
   // finish do response) pode devolver so um pedaco do caminho original.
   const path = req.path;
 
-  if (path === "/health" || isDashboardReadRoute(req)) {
+  if (path === "/health" || isDashboardReadRoute(req) || isBrowserNoiseRoute(req)) {
     next();
     return;
   }
