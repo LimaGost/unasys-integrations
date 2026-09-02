@@ -237,3 +237,17 @@ export interface KanbanConfig {
 }
 
 export type KanbanConfigRecord = KanbanConfig & Base44ServerFields;
+
+/**
+ * Apontamento de horas trabalhadas num Ticket. Campos completos do Base44 sao
+ * mais numerosos (horario, tecnico, anexos...) - tipados aqui so os usados
+ * por este servico (recalculo de total_normal_hours/total_extra_hours do
+ * Ticket, ver TicketActionsService.recomputeHours).
+ */
+export interface TimeEntry {
+  ticket_id: string;
+  normal_hours?: number;
+  extra_hours?: number;
+}
+
+export type TimeEntryRecord = TimeEntry & Base44ServerFields;

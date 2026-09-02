@@ -19,6 +19,7 @@ import { SyncStateRepository } from "./infrastructure/base44/SyncStateRepository
 import { TicketEmailRepository } from "./infrastructure/base44/TicketEmailRepository";
 import { TicketEventRepository } from "./infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "./infrastructure/base44/TicketRepository";
+import { TimeEntryRepository } from "./infrastructure/base44/TimeEntryRepository";
 import { UserRepository } from "./infrastructure/base44/UserRepository";
 import { InboxReader } from "./infrastructure/email/InboxReader";
 import { Mailer } from "./infrastructure/email/Mailer";
@@ -33,6 +34,7 @@ const kanbanConfigRepository = new KanbanConfigRepository();
 const automationRuleRepository = new AutomationRuleRepository();
 const notificationRepository = new NotificationRepository();
 const notificationConfigRepository = new NotificationConfigRepository();
+const timeEntryRepository = new TimeEntryRepository();
 
 export const emailService = new EmailService(
   new Mailer(),
@@ -71,5 +73,6 @@ export const ticketActionsService = new TicketActionsService(
   ticketEventRepository,
   notificationService,
   emailService,
-  ticketAutomationEngine
+  ticketAutomationEngine,
+  timeEntryRepository
 );

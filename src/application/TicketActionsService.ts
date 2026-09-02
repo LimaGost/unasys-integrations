@@ -1,5 +1,6 @@
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
+import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepository";
 import type { TicketRecord } from "../types/entities";
 import type { EmailService } from "./EmailService";
 import type { NotificationService } from "./NotificationService";
@@ -50,8 +51,29 @@ export class TicketActionsService {
     private readonly ticketEvents: TicketEventRepository,
     private readonly notifications: NotificationService,
     private readonly mailer: EmailService,
-    private readonly automation: TicketAutomationEngine
+    private readonly automation: TicketAutomationEngine,
+    private readonly timeEntries: TimeEntryRepository
   ) {}
+
+  /**
+   * Porta a antiga function `recomputeTicketHours` do Base44 - chamada apos
+   * criar/editar/apagar um TimeEntry. Regra unica: TODAS as horas registradas
+   * contam (inclusive as do tipo "interna") - mesma regra usada na tela do
+   * ticket e nos relatorios, para nunca haver divergencia.
+   */
+  async recomputeHours(ticketId: string): Promise<{ ticketId: string; totalNormalHours: number; totalExtraHours: number }> {
+    if (!ticketId) {
+      throw Object.assign(new Error("Campo obrigatorio: ticketId."), { status: 400 });
+    }
+
+    const entries = await this.timeEntries.findByTicket(ticketId);
+    const totalNormalHours = Math.round(entries.reduce((sum, e) => sum + (e.normal_hours || 0), 0) * 100) / 100;
+    const totalExtraHours = Math.round(entries.reduce((sum, e) => sum + (e.extra_hours || 0), 0) * 100) / 100;
+
+    await this.tickets.update(ticketId, { total_normal_hours: totalNormalHours, total_extra_hours: totalExtraHours });
+
+    return { ticketId, totalNormalHours, totalExtraHours };
+  }
 
   async updateStatus(command: UpdateTicketStatusCommand, actor: TicketActor): Promise<UpdateTicketStatusResult> {
     const { ticketId, newStatus, columnData, subStatus } = command;

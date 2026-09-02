@@ -437,8 +437,9 @@ export const DASHBOARD_HTML = `<!doctype html>
         <span class="pill" id="ticketActionsStatusPill">verificando</span>
       </div>
       <p class="settings-desc">
-        Token exclusivo para as acoes de Ticket/Kanban migradas do Base44 (comecando por
-        <code>updateTicketStatus</code>, chamada a cada movimentacao de card). Chamado direto do
+        Token exclusivo para as acoes de Ticket/Kanban migradas do Base44:
+        <code>updateTicketStatus</code> (a cada movimentacao de card), <code>createNotification</code>
+        e <code>recomputeTicketHours</code> (a cada apontamento de hora). Chamado direto do
         navegador do usuario contra <code>/public/ticket-actions/*</code>.
       </p>
       <div class="token-row">

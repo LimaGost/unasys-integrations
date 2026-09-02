@@ -10,6 +10,7 @@ import type {
   TicketEmailRecord,
   TicketEventRecord,
   TicketRecord,
+  TimeEntryRecord,
 } from "../types/entities";
 
 /**
@@ -55,6 +56,7 @@ export interface Base44Entities {
   Notification: EntityHandler<NotificationRecord>;
   NotificationConfig: EntityHandler<NotificationConfigRecord>;
   KanbanConfig: EntityHandler<KanbanConfigRecord>;
+  TimeEntry: EntityHandler<TimeEntryRecord>;
 }
 
 /**
@@ -73,6 +75,7 @@ export function getEntities(client: Base44Client): Base44Entities {
     Notification: client.entities.Notification as unknown as EntityHandler<NotificationRecord>,
     NotificationConfig: client.entities.NotificationConfig as unknown as EntityHandler<NotificationConfigRecord>,
     KanbanConfig: client.entities.KanbanConfig as unknown as EntityHandler<KanbanConfigRecord>,
+    TimeEntry: client.entities.TimeEntry as unknown as EntityHandler<TimeEntryRecord>,
   };
 }
 
