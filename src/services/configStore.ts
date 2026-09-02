@@ -68,6 +68,13 @@ export interface StoredConfig {
      * visivel no frontend, entao token proprio.
      */
     emailAdmin: WebhookTokenEntry;
+    /**
+     * Token exclusivo das acoes de ticket migradas do Base44 (ex:
+     * updateTicketStatus, chamada a cada movimentacao de card no Kanban),
+     * chamado DIRETO do navegador do usuario contra /public/ticket-actions/*
+     * - mesmo motivo dos outros: fica visivel no frontend, entao token proprio.
+     */
+    ticketActions: WebhookTokenEntry;
   };
   customIntegrations: CustomIntegration[];
 }
@@ -94,6 +101,7 @@ function migrateLegacyConfig(legacy: LegacyStoredConfig): StoredConfig {
       userDirectory: {},
       attachments: {},
       emailAdmin: {},
+      ticketActions: {},
     },
     customIntegrations: legacy.customIntegrations ?? [],
   };
@@ -116,6 +124,10 @@ function backfillNewWebhookTokens(config: StoredConfig): boolean {
   }
   if (!config.webhookTokens.emailAdmin) {
     config.webhookTokens.emailAdmin = {};
+    changed = true;
+  }
+  if (!config.webhookTokens.ticketActions) {
+    config.webhookTokens.ticketActions = {};
     changed = true;
   }
   return changed;
@@ -150,6 +162,7 @@ function seedFromEnv(): StoredConfig {
       userDirectory: {},
       attachments: {},
       emailAdmin: {},
+      ticketActions: {},
     },
     customIntegrations: [],
   };
@@ -222,7 +235,7 @@ export async function setGmailCredentials(
   });
 }
 
-export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory" | "attachments" | "emailAdmin";
+export type WebhookIntegration = "salesData" | "gmail" | "emailButton" | "userDirectory" | "attachments" | "emailAdmin" | "ticketActions";
 
 export async function regenerateWebhookToken(integration: WebhookIntegration): Promise<string> {
   const token = generateToken();

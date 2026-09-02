@@ -8,6 +8,7 @@ import dashboardRouter from "./routes/dashboard";
 import gmailRouter, { runGmailPoll } from "./routes/gmail";
 import publicEmailAdminRouter from "./routes/publicEmailAdmin";
 import publicEmailSendRouter from "./routes/publicEmailSend";
+import publicTicketActionsRouter from "./routes/publicTicketActions";
 import publicUploadsRouter, { UPLOADS_DIR } from "./routes/publicUploads";
 import publicUsersRouter from "./routes/publicUsers";
 import salesDataRouter from "./routes/salesData";
@@ -51,6 +52,7 @@ app.use("/public/email", publicEmailSendRouter);
 app.use("/public/email-admin", publicEmailAdminRouter);
 app.use("/public/users", publicUsersRouter);
 app.use("/public/uploads", publicUploadsRouter);
+app.use("/public/ticket-actions", publicTicketActionsRouter);
 app.use("/uploads", express.static(UPLOADS_DIR, { maxAge: "365d", index: false }));
 app.use("/dashboard", dashboardRouter);
 

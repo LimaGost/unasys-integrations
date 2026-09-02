@@ -404,6 +404,33 @@ export const DASHBOARD_HTML = `<!doctype html>
     </div>
 
     <div class="settings-block">
+      <div class="settings-block-head">
+        <h3>Acoes de ticket (Base44)</h3>
+        <span class="pill" id="ticketActionsStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Token exclusivo para as acoes de Ticket/Kanban migradas do Base44 (comecando por
+        <code>updateTicketStatus</code>, chamada a cada movimentacao de card). Chamado direto do
+        navegador do usuario contra <code>/public/ticket-actions/*</code>.
+      </p>
+      <div class="token-row">
+        <span class="token-label">URL base</span>
+        <input type="text" id="urlTicketActions" readonly>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Token</span>
+        <input type="text" id="tokenTicketActions" readonly>
+        <button class="action small" type="button" data-integration="ticketActions">Gerar novo</button>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Cadastrado em</span>
+        <input type="text" id="noteTicketActions" placeholder="ex: Base44 > KanbanBoard.jsx / TicketDetail.jsx">
+        <button class="action small" type="button" data-note-integration="ticketActions">Salvar</button>
+      </div>
+      <div class="action-result" id="ticketActionsTokenResult"></div>
+    </div>
+
+    <div class="settings-block">
       <h3>Outras integracoes</h3>
       <p class="settings-desc">
         Cadastre um nome para gerar na hora um endpoint novo (<code>/webhooks/custom/&lt;nome&gt;</code>)
@@ -699,6 +726,10 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenEmailAdmin").value = data.webhookTokens.emailAdmin.token || "(nao configurado)";
       document.getElementById("noteEmailAdmin").value = data.webhookTokens.emailAdmin.note || "";
 
+      document.getElementById("urlTicketActions").value = origin + "/public/ticket-actions";
+      document.getElementById("tokenTicketActions").value = data.webhookTokens.ticketActions.token || "(nao configurado)";
+      document.getElementById("noteTicketActions").value = data.webhookTokens.ticketActions.note || "";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
@@ -707,6 +738,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       setStatusPill("userDirectoryStatusPill", Boolean(data.webhookTokens.userDirectory.token), "token configurado", "sem token");
       setStatusPill("attachmentsStatusPill", Boolean(data.webhookTokens.attachments.token), "token configurado", "sem token");
       setStatusPill("emailAdminStatusPill", Boolean(data.webhookTokens.emailAdmin.token), "token configurado", "sem token");
+      setStatusPill("ticketActionsStatusPill", Boolean(data.webhookTokens.ticketActions.token), "token configurado", "sem token");
     }).catch(function () {});
   }
 
@@ -737,7 +769,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     emailButton: { token: "tokenEmailButton", note: "noteEmailButton", result: "emailButtonTokenResult", pill: "emailButtonStatusPill" },
     userDirectory: { token: "tokenUserDirectory", note: "noteUserDirectory", result: "userDirectoryTokenResult", pill: "userDirectoryStatusPill" },
     attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" },
-    emailAdmin: { token: "tokenEmailAdmin", note: "noteEmailAdmin", result: "emailAdminTokenResult", pill: "emailAdminStatusPill" }
+    emailAdmin: { token: "tokenEmailAdmin", note: "noteEmailAdmin", result: "emailAdminTokenResult", pill: "emailAdminStatusPill" },
+    ticketActions: { token: "tokenTicketActions", note: "noteTicketActions", result: "ticketActionsTokenResult", pill: "ticketActionsStatusPill" }
   };
 
   [].forEach.call(document.querySelectorAll("[data-integration]"), function (btn) {
