@@ -6,6 +6,7 @@ import { requireWebhookToken } from "../middleware/auth";
 import { callBase44 } from "../services/base44Client";
 import { DEFAULT_STATUS_COLUMN, findOrCreateClient, getEntities, normalizeVertical } from "../services/base44Entities";
 import { getConfig } from "../services/configStore";
+import { ticketCreationHooks } from "../container";
 import type { ClientRecord, TicketMainType, TicketRecord, TicketUrgency } from "../types/entities";
 
 /**
@@ -128,6 +129,10 @@ router.post(
         user_email: env.base44.serviceEmail,
         visible_to_client: false,
       });
+
+      // Porta as automacoes de plataforma "onTicketCreated"/"criarClienteAoNovoTicket"
+      // do Base44 - ate essas serem desativadas la, isso roda em dobro (ver TicketCreationHooks.ts).
+      await ticketCreationHooks.afterTicketCreated(created);
 
       return { ticket: created };
     });

@@ -9,6 +9,7 @@ import { NotificationService } from "./application/NotificationService";
 import { SlaAutomationService } from "./application/SlaAutomationService";
 import { TicketActionsService } from "./application/TicketActionsService";
 import { TicketAutomationEngine } from "./application/TicketAutomationEngine";
+import { TicketCreationHooks } from "./application/TicketCreationHooks";
 import { UserDirectoryService } from "./application/UserDirectoryService";
 import { AutomationRuleRepository } from "./infrastructure/base44/AutomationRuleRepository";
 import { ClientRepository } from "./infrastructure/base44/ClientRepository";
@@ -24,7 +25,7 @@ import { UserRepository } from "./infrastructure/base44/UserRepository";
 import { InboxReader } from "./infrastructure/email/InboxReader";
 import { Mailer } from "./infrastructure/email/Mailer";
 
-const ticketRepository = new TicketRepository();
+export const ticketRepository = new TicketRepository();
 const ticketEmailRepository = new TicketEmailRepository();
 const ticketEventRepository = new TicketEventRepository();
 const clientRepository = new ClientRepository();
@@ -76,3 +77,5 @@ export const ticketActionsService = new TicketActionsService(
   ticketAutomationEngine,
   timeEntryRepository
 );
+
+export const ticketCreationHooks = new TicketCreationHooks(clientRepository, notificationService, userRepository);

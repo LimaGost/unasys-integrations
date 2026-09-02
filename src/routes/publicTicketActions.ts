@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { notificationService, ticketActionsService } from "../container";
+import { notificationService, ticketActionsService, ticketCreationHooks, ticketRepository } from "../container";
 import { getConfig } from "../services/configStore";
 import type { NotificationType } from "../types/entities";
 
@@ -10,9 +10,9 @@ import type { NotificationType } from "../types/entities";
  * motivo das outras rotas /public/*: evitar credito de integracao no Base44 a
  * cada movimentacao de card, a acao mais frequente do sistema. Funcoes
  * migradas ate agora: updateTicketStatus, createNotification,
- * recomputeTicketHours. Ainda falta executeAutomationRules isolado e os
- * hooks de criacao (esses ultimos podem ser automacoes de plataforma do
- * Base44, nao chamadas diretas do frontend - confirmar antes de portar).
+ * recomputeTicketHours, on-ticket-created (onTicketCreated +
+ * criarClienteAoNovoTicket - ver TicketCreationHooks.ts). Ainda falta
+ * executeAutomationRules isolado.
  */
 const NOTIFICATION_TYPES: readonly NotificationType[] = [
   "ticket_assigned",
@@ -197,6 +197,28 @@ router.post(
       total_normal_hours: result.totalNormalHours,
       total_extra_hours: result.totalExtraHours,
     });
+  })
+);
+
+router.post(
+  "/on-ticket-created",
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!requireToken(req, res)) return;
+
+    const ticketId = typeof req.body?.ticket_id === "string" ? req.body.ticket_id : "";
+    if (!ticketId) {
+      res.status(400).json({ error: "BadRequest", message: "Campo obrigatorio: ticket_id." });
+      return;
+    }
+
+    const ticket = await ticketRepository.findById(ticketId);
+    if (!ticket) {
+      res.status(404).json({ error: "NotFound", message: "Ticket nao encontrado." });
+      return;
+    }
+
+    await ticketCreationHooks.afterTicketCreated(ticket);
+    res.status(200).json({ status: "success" });
   })
 );
 

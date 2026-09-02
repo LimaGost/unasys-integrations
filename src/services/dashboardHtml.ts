@@ -438,9 +438,11 @@ export const DASHBOARD_HTML = `<!doctype html>
       </div>
       <p class="settings-desc">
         Token exclusivo para as acoes de Ticket/Kanban migradas do Base44:
-        <code>updateTicketStatus</code> (a cada movimentacao de card), <code>createNotification</code>
-        e <code>recomputeTicketHours</code> (a cada apontamento de hora). Chamado direto do
-        navegador do usuario contra <code>/public/ticket-actions/*</code>.
+        <code>updateTicketStatus</code> (a cada movimentacao de card), <code>createNotification</code>,
+        <code>recomputeTicketHours</code> (a cada apontamento de hora) e <code>on-ticket-created</code>
+        (a cada ticket criado manualmente pela tela - avisa os analistas da vertical e garante o
+        Client do solicitante). Chamado direto do navegador do usuario contra
+        <code>/public/ticket-actions/*</code>.
       </p>
       <div class="token-row">
         <span class="token-label">URL base</span>
