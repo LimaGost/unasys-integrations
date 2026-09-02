@@ -230,6 +230,34 @@ export const DASHBOARD_HTML = `<!doctype html>
 
     <div class="settings-block">
       <div class="settings-block-head">
+        <h3>Criar ticket · sistema externo</h3>
+        <span class="pill" id="externalTicketsStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Cria um Ticket a partir de um identificador de cliente (email ou ID) - para sistemas
+        externos alem do Unasys Flow (que usa a integracao de Vendas acima). Chame
+        <code>POST /webhooks/tickets/create-from-external</code> com o token abaixo no header
+        <code>x-webhook-token</code>.
+      </p>
+      <div class="token-row">
+        <span class="token-label">URL</span>
+        <input type="text" id="urlExternalTickets" readonly>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Token</span>
+        <input type="text" id="tokenExternalTickets" readonly>
+        <button class="action small" type="button" data-integration="externalTickets">Gerar novo</button>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Cadastrado em</span>
+        <input type="text" id="noteExternalTickets" placeholder="ex: sistema X, cadastrado em ...">
+        <button class="action small" type="button" data-note-integration="externalTickets">Salvar</button>
+      </div>
+      <div class="action-result" id="externalTicketsTokenResult"></div>
+    </div>
+
+    <div class="settings-block">
+      <div class="settings-block-head">
         <h3>Email · enviar e receber</h3>
         <span class="pill" id="gmailStatusPill">verificando</span>
       </div>
@@ -730,6 +758,10 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenTicketActions").value = data.webhookTokens.ticketActions.token || "(nao configurado)";
       document.getElementById("noteTicketActions").value = data.webhookTokens.ticketActions.note || "";
 
+      document.getElementById("urlExternalTickets").value = origin + "/webhooks/tickets/create-from-external";
+      document.getElementById("tokenExternalTickets").value = data.webhookTokens.externalTickets.token || "(nao configurado)";
+      document.getElementById("noteExternalTickets").value = data.webhookTokens.externalTickets.note || "";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
@@ -739,6 +771,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       setStatusPill("attachmentsStatusPill", Boolean(data.webhookTokens.attachments.token), "token configurado", "sem token");
       setStatusPill("emailAdminStatusPill", Boolean(data.webhookTokens.emailAdmin.token), "token configurado", "sem token");
       setStatusPill("ticketActionsStatusPill", Boolean(data.webhookTokens.ticketActions.token), "token configurado", "sem token");
+      setStatusPill("externalTicketsStatusPill", Boolean(data.webhookTokens.externalTickets.token), "token configurado", "sem token");
     }).catch(function () {});
   }
 
@@ -770,7 +803,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     userDirectory: { token: "tokenUserDirectory", note: "noteUserDirectory", result: "userDirectoryTokenResult", pill: "userDirectoryStatusPill" },
     attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" },
     emailAdmin: { token: "tokenEmailAdmin", note: "noteEmailAdmin", result: "emailAdminTokenResult", pill: "emailAdminStatusPill" },
-    ticketActions: { token: "tokenTicketActions", note: "noteTicketActions", result: "ticketActionsTokenResult", pill: "ticketActionsStatusPill" }
+    ticketActions: { token: "tokenTicketActions", note: "noteTicketActions", result: "ticketActionsTokenResult", pill: "ticketActionsStatusPill" },
+    externalTickets: { token: "tokenExternalTickets", note: "noteExternalTickets", result: "externalTicketsTokenResult", pill: "externalTicketsStatusPill" }
   };
 
   [].forEach.call(document.querySelectorAll("[data-integration]"), function (btn) {

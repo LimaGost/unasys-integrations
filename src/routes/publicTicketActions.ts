@@ -1,17 +1,33 @@
 import { timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { ticketActionsService } from "../container";
+import { notificationService, ticketActionsService } from "../container";
 import { getConfig } from "../services/configStore";
+import type { NotificationType } from "../types/entities";
 
 /**
  * Chamado DIRETO do navegador pelas telas de Ticket/Kanban do Base44 - mesmo
  * motivo das outras rotas /public/*: evitar credito de integracao no Base44 a
- * cada movimentacao de card, a acao mais frequente do sistema. Primeira
- * function do "nucleo" de Ticket/Kanban migrada (updateTicketStatus); as
- * demais (executeAutomationRules isolado, createTicketFromExternal,
- * recomputeTicketHours, hooks de criacao) ainda vivem no Base44.
+ * cada movimentacao de card, a acao mais frequente do sistema. Funcoes
+ * migradas ate agora: updateTicketStatus, createNotification. Ainda faltam
+ * executeAutomationRules isolado, createTicketFromExternal,
+ * recomputeTicketHours e os hooks de criacao (esses ultimos podem ser
+ * automacoes de plataforma do Base44, nao chamadas diretas do frontend -
+ * confirmar antes de portar).
  */
+const NOTIFICATION_TYPES: readonly NotificationType[] = [
+  "ticket_assigned",
+  "status_changed",
+  "new_comment",
+  "new_time_entry",
+  "mentioned",
+  "sla_warning",
+  "ticket_created",
+];
+
+function isNotificationType(value: unknown): value is NotificationType {
+  return typeof value === "string" && (NOTIFICATION_TYPES as readonly string[]).includes(value);
+}
 const ALLOWED_ORIGINS = ["https://unasystickets.base44.app", "https://preview--unasystickets.base44.app"];
 const TOKEN_HEADER = "x-app-token";
 
@@ -128,6 +144,40 @@ router.post(
       }
       throw error;
     }
+  })
+);
+
+router.post(
+  "/create-notification",
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!requireToken(req, res)) return;
+
+    const body = req.body ?? {};
+    const userEmail = typeof body.user_email === "string" ? body.user_email : "";
+    const title = typeof body.title === "string" ? body.title : "";
+    const message = typeof body.message === "string" ? body.message : "";
+
+    if (!userEmail || !title || !message || !isNotificationType(body.type)) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: `Campos obrigatorios: user_email, title, message, type (um de: ${NOTIFICATION_TYPES.join(", ")}).`,
+      });
+      return;
+    }
+
+    const result = await notificationService.create({
+      userEmail,
+      type: body.type,
+      title,
+      message,
+      ticketId: typeof body.ticket_id === "string" ? body.ticket_id : null,
+      ticketTitle: typeof body.ticket_title === "string" ? body.ticket_title : null,
+      actorName: typeof body.actor_name === "string" ? body.actor_name : null,
+      actorEmail: typeof body.actor_email === "string" ? body.actor_email : null,
+      priority: body.priority === "low" || body.priority === "high" ? body.priority : "normal",
+    });
+
+    res.status(200).json(result);
   })
 );
 

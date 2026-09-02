@@ -5,6 +5,7 @@ import { env } from "./config/env";
 import { activityLogger } from "./middleware/activityLogger";
 import customIntegrationsRouter from "./routes/customIntegrations";
 import dashboardRouter from "./routes/dashboard";
+import externalTicketsRouter from "./routes/externalTickets";
 import gmailRouter, { runGmailPoll } from "./routes/gmail";
 import publicEmailAdminRouter from "./routes/publicEmailAdmin";
 import publicEmailSendRouter from "./routes/publicEmailSend";
@@ -47,6 +48,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/webhooks/gmail", gmailRouter);
 app.use("/webhooks/sales-data", salesDataRouter);
+app.use("/webhooks/tickets", externalTicketsRouter);
 app.use("/webhooks/custom", customIntegrationsRouter);
 app.use("/public/email", publicEmailSendRouter);
 app.use("/public/email-admin", publicEmailAdminRouter);

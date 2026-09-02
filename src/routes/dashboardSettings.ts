@@ -19,7 +19,8 @@ function isWebhookIntegration(value: string): value is WebhookIntegration {
     value === "userDirectory" ||
     value === "attachments" ||
     value === "emailAdmin" ||
-    value === "ticketActions"
+    value === "ticketActions" ||
+    value === "externalTickets"
   );
 }
 
@@ -52,6 +53,7 @@ router.get("/", (_req: Request, res: Response) => {
       attachments: { token: config.webhookTokens.attachments.token ?? null, note: config.webhookTokens.attachments.note ?? "" },
       emailAdmin: { token: config.webhookTokens.emailAdmin.token ?? null, note: config.webhookTokens.emailAdmin.note ?? "" },
       ticketActions: { token: config.webhookTokens.ticketActions.token ?? null, note: config.webhookTokens.ticketActions.note ?? "" },
+      externalTickets: { token: config.webhookTokens.externalTickets.token ?? null, note: config.webhookTokens.externalTickets.note ?? "" },
     },
     customIntegrations: config.customIntegrations.map((integration) => ({
       slug: integration.slug,
@@ -101,7 +103,7 @@ router.post(
     if (!isWebhookIntegration(integration)) {
       res.status(400).json({
         error: "BadRequest",
-        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory', 'attachments', 'emailAdmin' ou 'ticketActions'.",
+        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory', 'attachments', 'emailAdmin', 'ticketActions' ou 'externalTickets'.",
       });
       return;
     }
@@ -119,7 +121,7 @@ router.post(
     if (!isWebhookIntegration(integration)) {
       res.status(400).json({
         error: "BadRequest",
-        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory', 'attachments', 'emailAdmin' ou 'ticketActions'.",
+        message: "Integracao invalida. Use 'salesData', 'gmail', 'emailButton', 'userDirectory', 'attachments', 'emailAdmin', 'ticketActions' ou 'externalTickets'.",
       });
       return;
     }
