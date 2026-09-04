@@ -258,6 +258,35 @@ export const DASHBOARD_HTML = `<!doctype html>
 
     <div class="settings-block">
       <div class="settings-block-head">
+        <h3>Atendimento SM Click (WhatsApp)</h3>
+        <span class="pill" id="smclickStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Cria o Ticket sozinho quando um cliente manda a primeira mensagem no WhatsApp
+        (evento <code>new-chat</code>) e fecha o Ticket sozinho quando o atendimento termina
+        na SM Click (evento <code>chat-finished</code>). Cadastre a URL completa abaixo (ja
+        inclui o token) no painel da SM Click, em Webhooks, para os dois eventos. Departamento
+        SM Click vira vertical do Unasys Tickets: Retail → Retail, Farma → Farma, Degust → Food.
+      </p>
+      <div class="token-row">
+        <span class="token-label">URL completa</span>
+        <input type="text" id="urlSmclick" readonly>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Token</span>
+        <input type="text" id="tokenSmclick" readonly>
+        <button class="action small" type="button" data-integration="smclick">Gerar novo</button>
+      </div>
+      <div class="token-row">
+        <span class="token-label">Cadastrado em</span>
+        <input type="text" id="noteSmclick" placeholder="ex: painel SM Click &gt; Webhooks &gt; new-chat, chat-finished">
+        <button class="action small" type="button" data-note-integration="smclick">Salvar</button>
+      </div>
+      <div class="action-result" id="smclickTokenResult"></div>
+    </div>
+
+    <div class="settings-block">
+      <div class="settings-block-head">
         <h3>Email · enviar e receber</h3>
         <span class="pill" id="gmailStatusPill">verificando</span>
       </div>
@@ -765,6 +794,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenExternalTickets").value = data.webhookTokens.externalTickets.token || "(nao configurado)";
       document.getElementById("noteExternalTickets").value = data.webhookTokens.externalTickets.note || "";
 
+      document.getElementById("urlSmclick").value = data.webhookTokens.smclick.token
+        ? origin + "/webhooks/smclick/" + data.webhookTokens.smclick.token
+        : "(gere um token primeiro)";
+      document.getElementById("tokenSmclick").value = data.webhookTokens.smclick.token || "(nao configurado)";
+      document.getElementById("noteSmclick").value = data.webhookTokens.smclick.note || "";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
@@ -775,6 +810,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       setStatusPill("emailAdminStatusPill", Boolean(data.webhookTokens.emailAdmin.token), "token configurado", "sem token");
       setStatusPill("ticketActionsStatusPill", Boolean(data.webhookTokens.ticketActions.token), "token configurado", "sem token");
       setStatusPill("externalTicketsStatusPill", Boolean(data.webhookTokens.externalTickets.token), "token configurado", "sem token");
+      setStatusPill("smclickStatusPill", Boolean(data.webhookTokens.smclick.token), "token configurado", "sem token");
     }).catch(function () {});
   }
 
@@ -807,7 +843,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     attachments: { token: "tokenAttachments", note: "noteAttachments", result: "attachmentsTokenResult", pill: "attachmentsStatusPill" },
     emailAdmin: { token: "tokenEmailAdmin", note: "noteEmailAdmin", result: "emailAdminTokenResult", pill: "emailAdminStatusPill" },
     ticketActions: { token: "tokenTicketActions", note: "noteTicketActions", result: "ticketActionsTokenResult", pill: "ticketActionsStatusPill" },
-    externalTickets: { token: "tokenExternalTickets", note: "noteExternalTickets", result: "externalTicketsTokenResult", pill: "externalTicketsStatusPill" }
+    externalTickets: { token: "tokenExternalTickets", note: "noteExternalTickets", result: "externalTicketsTokenResult", pill: "externalTicketsStatusPill" },
+    smclick: { token: "tokenSmclick", note: "noteSmclick", result: "smclickTokenResult", pill: "smclickStatusPill" }
   };
 
   [].forEach.call(document.querySelectorAll("[data-integration]"), function (btn) {
@@ -820,6 +857,9 @@ export const DASHBOARD_HTML = `<!doctype html>
           showResult(resultEl, res.ok, res.data.message || res.data.error || "Falhou.");
           if (res.ok) {
             document.getElementById(ids.token).value = res.data.token;
+            if (integration === "smclick") {
+              document.getElementById("urlSmclick").value = window.location.origin + "/webhooks/smclick/" + res.data.token;
+            }
             if (ids.pill) {
               setStatusPill(ids.pill, true, "token configurado", "sem token");
             }

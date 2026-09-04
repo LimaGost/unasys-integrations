@@ -83,6 +83,13 @@ export interface StoredConfig {
      * afeta os outros").
      */
     externalTickets: WebhookTokenEntry;
+    /**
+     * Token de POST /webhooks/smclick/:token (webhooks de atendimento da SM
+     * Click - WhatsApp). Diferente dos outros, o token vai NA URL (nao no
+     * header x-webhook-token) porque a SM Click nao documenta suporte a
+     * header customizado no cadastro do webhook - ver routes/smclickWebhook.ts.
+     */
+    smclick: WebhookTokenEntry;
   };
   customIntegrations: CustomIntegration[];
 }
@@ -111,6 +118,7 @@ function migrateLegacyConfig(legacy: LegacyStoredConfig): StoredConfig {
       emailAdmin: {},
       ticketActions: {},
       externalTickets: {},
+      smclick: {},
     },
     customIntegrations: legacy.customIntegrations ?? [],
   };
@@ -141,6 +149,10 @@ function backfillNewWebhookTokens(config: StoredConfig): boolean {
   }
   if (!config.webhookTokens.externalTickets) {
     config.webhookTokens.externalTickets = {};
+    changed = true;
+  }
+  if (!config.webhookTokens.smclick) {
+    config.webhookTokens.smclick = {};
     changed = true;
   }
   return changed;
@@ -177,6 +189,7 @@ function seedFromEnv(): StoredConfig {
       emailAdmin: {},
       ticketActions: {},
       externalTickets: {},
+      smclick: {},
     },
     customIntegrations: [],
   };
@@ -257,7 +270,8 @@ export type WebhookIntegration =
   | "attachments"
   | "emailAdmin"
   | "ticketActions"
-  | "externalTickets";
+  | "externalTickets"
+  | "smclick";
 
 export async function regenerateWebhookToken(integration: WebhookIntegration): Promise<string> {
   const token = generateToken();

@@ -7,10 +7,12 @@
 import { EmailService } from "./application/EmailService";
 import { NotificationService } from "./application/NotificationService";
 import { SlaAutomationService } from "./application/SlaAutomationService";
+import { SmclickIntegrationService } from "./application/SmclickIntegrationService";
 import { TicketActionsService } from "./application/TicketActionsService";
 import { TicketAutomationEngine } from "./application/TicketAutomationEngine";
 import { TicketCreationHooks } from "./application/TicketCreationHooks";
 import { UserDirectoryService } from "./application/UserDirectoryService";
+import { env } from "./config/env";
 import { AutomationRuleRepository } from "./infrastructure/base44/AutomationRuleRepository";
 import { ClientRepository } from "./infrastructure/base44/ClientRepository";
 import { KanbanConfigRepository } from "./infrastructure/base44/KanbanConfigRepository";
@@ -79,3 +81,13 @@ export const ticketActionsService = new TicketActionsService(
 );
 
 export const ticketCreationHooks = new TicketCreationHooks(clientRepository, notificationService, userRepository);
+
+export const smclickIntegrationService = new SmclickIntegrationService(
+  ticketRepository,
+  ticketEventRepository,
+  clientRepository,
+  kanbanConfigRepository,
+  ticketActionsService,
+  ticketCreationHooks,
+  env.base44.serviceEmail
+);

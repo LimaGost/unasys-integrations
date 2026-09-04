@@ -14,6 +14,7 @@ import publicUploadsRouter, { UPLOADS_DIR } from "./routes/publicUploads";
 import publicUsersRouter from "./routes/publicUsers";
 import salesDataRouter from "./routes/salesData";
 import { runSlaBreachCheck, runSlaCheck } from "./routes/slaChecks";
+import smclickWebhookRouter from "./routes/smclickWebhook";
 import { authenticateBase44Client } from "./services/base44Client";
 import { loadConfigStore } from "./services/configStore";
 import { emailService } from "./container";
@@ -49,6 +50,7 @@ app.get("/health", (_req, res) => {
 app.use("/webhooks/gmail", gmailRouter);
 app.use("/webhooks/sales-data", salesDataRouter);
 app.use("/webhooks/tickets", externalTicketsRouter);
+app.use("/webhooks/smclick", smclickWebhookRouter);
 app.use("/webhooks/custom", customIntegrationsRouter);
 app.use("/public/email", publicEmailSendRouter);
 app.use("/public/email-admin", publicEmailAdminRouter);
