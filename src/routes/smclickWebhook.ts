@@ -12,9 +12,11 @@ import type { SmclickChat } from "../application/SmclickIntegrationService";
  * das outras integracoes deste servico, que usam o header x-webhook-token -
  * ver middleware/auth.ts), entao o token vai na propria URL: cadastre a URL
  * completa (com o token, gerada no painel /dashboard) no painel da SM Click,
- * em Webhooks, para os eventos `chat-started` e `chat-finished`. O gatilho de
- * criacao e `chat-started` (nao `new-chat`) de proposito - ver o comentario
- * no topo de application/SmclickIntegrationService.ts.
+ * em Webhooks, para os eventos `chat-started`, `chat-finished` e
+ * `new-chat-message` (esse ultimo sincroniza o transcript ao vivo, ANTES do
+ * atendimento finalizar - ver SmclickIntegrationService.handleNewChatMessage).
+ * O gatilho de criacao do Ticket e `chat-started` (nao `new-chat`) de
+ * proposito - ver o comentario no topo de application/SmclickIntegrationService.ts.
  *
  * Qualquer outro evento cadastrado nessa mesma URL e apenas ignorado (200),
  * para nao gerar "erro" no painel da SM Click - a logica de negocio fica em
@@ -88,6 +90,18 @@ router.post(
     if (body.event === "chat-finished") {
       const result = await smclickIntegrationService.handleChatFinished(chat);
       logEvent(body, result);
+      res.status(200).json(result);
+      return;
+    }
+
+    if (body.event === "new-chat-message") {
+      const result = await smclickIntegrationService.handleNewChatMessage(chat);
+      // Esse evento dispara a CADA mensagem - logar toda vez (mesmo os
+      // "sincronizado_recentemente" do debounce) inundaria o log. So loga
+      // quando de fato sincronizou ou algo deu errado.
+      if (result.status !== "skipped" || result.reason !== "sincronizado_recentemente") {
+        logEvent(body, result);
+      }
       res.status(200).json(result);
       return;
     }

@@ -61,11 +61,22 @@ function messageLine(msg: SmclickMessage, contactName: string, time: string): st
 }
 
 /**
+ * Prefixo fixo do HTML gerado aqui (nao muda entre a versao "em andamento" e
+ * a versao final) - usado por SmclickIntegrationService pra reconhecer, entre
+ * os Registros de um Ticket, qual e o Registro automatico do transcript
+ * (pra atualizar em vez de duplicar a cada sincronizacao).
+ */
+export const TRANSCRIPT_HEADER_PREFIX = "<p><strong>Histórico da conversa (WhatsApp via SM Click)";
+
+/**
  * Monta o HTML do campo "Relato da Atividade" (TimeEntry.description) a
  * partir das mensagens de um atendimento SM Click - ver
- * SmclickIntegrationService.handleChatFinished.
+ * SmclickIntegrationService.handleChatFinished e .handleNewChatMessage (essa
+ * ultima sincroniza em tempo real, ANTES do atendimento finalizar - por isso
+ * o parametro `finished` deixa claro no proprio texto se e um retrato ao
+ * vivo ou a versao definitiva).
  */
-export function buildTranscript(messages: SmclickMessage[], contactName: string): TranscriptResult {
+export function buildTranscript(messages: SmclickMessage[], contactName: string, finished: boolean): TranscriptResult {
   const withDates = messages
     .map((msg) => ({ msg, date: new Date(msg.sent_at) }))
     .filter(({ date }) => !Number.isNaN(date.getTime()))
@@ -83,8 +94,9 @@ export function buildTranscript(messages: SmclickMessage[], contactName: string)
     .map(({ msg, date }) => messageLine(msg, contactName, formatTime(date)))
     .filter((line): line is string => line !== null);
 
+  const suffix = finished ? "" : " — atualizado automaticamente, atendimento ainda em andamento";
   const html =
-    `<p><strong>Histórico da conversa (WhatsApp via SM Click):</strong></p>` +
+    `${TRANSCRIPT_HEADER_PREFIX}${suffix}:</strong></p>` +
     (lines.length > 0 ? lines.join("") : "<p><em>Atendimento sem mensagens de texto (so eventos internos).</em></p>");
 
   return {
