@@ -341,24 +341,34 @@ export class SmclickIntegrationService {
   }
 
   /**
-   * Sincronizacao SOB DEMANDA: chamada pelo botao "Buscar conversa do
-   * WhatsApp" no Ticket (Base44), via /public/ticket-actions/smclick-sync-transcript
-   * - pedido do usuario em 2026-09-04, alternativa ao polling automatico do
-   * `new-chat-message` pra quem quer o historico na hora, sem esperar o
-   * proximo evento (ou o debounce de 45s).
+   * Busca SOB DEMANDA (SO LEITURA - nao grava nada no Base44) o historico da
+   * conversa, pro botao "Buscar conversa do WhatsApp" no Ticket (Base44)
+   * colar direto no editor "Relato da Atividade" da aba Novo Registro -
+   * pedido do usuario em 2026-09-04: o analista revisa/ajusta e salva o
+   * Registro ele mesmo, em vez do backend gravar por conta propria (esse
+   * ultimo continua acontecendo, sozinho, pelos webhooks - ver
+   * handleNewChatMessage/attachConversationTranscript - isto aqui e so uma
+   * forma alternativa e sob demanda de ANTECIPAR o conteudo no editor).
    *
-   * Diferente dos outros handlers, este NAO recebe o payload de um webhook -
-   * busca o retrato atual do atendimento direto na API da SM Click (status,
+   * Busca o retrato atual do atendimento direto na API da SM Click (status,
    * atendente, attending_time) pelo protocolo salvo em
-   * Ticket.external_customer_code. Se a SM Click ja mostra o atendimento como
-   * "finished" (mesmo que o webhook chat-finished ainda nao tenha chegado -
-   * ver o caso do estagio "pre-finish" documentado em 2026-09-04), grava a
-   * versao definitiva (hora real); senao, so atualiza o conteudo da
-   * conversa (0h), igual ao handleNewChatMessage. NUNCA mexe na coluna do
-   * Kanban - fechar o ticket continua sendo so responsabilidade do
-   * chat-finished.
+   * Ticket.external_customer_code - nao depende de nenhum webhook ter
+   * chegado.
    */
-  async syncTranscriptOnDemand(ticketId: string): Promise<SmclickEventResult> {
+  async getTranscriptPreview(ticketId: string): Promise<
+    | { status: "skipped"; reason: string }
+    | {
+        status: "ok";
+        html: string;
+        date: string;
+        startTime: string;
+        endTime: string;
+        finished: boolean;
+        normalHours: number;
+        technicianEmail: string;
+        technicianName: string;
+      }
+  > {
     const ticket = await this.tickets.findById(ticketId);
     if (!ticket) {
       return { status: "skipped", reason: "ticket_nao_encontrado" };
@@ -385,24 +395,17 @@ export class SmclickIntegrationService {
     }
 
     const attendant = resolvePrincipalAttendant(chatDetails);
-    const wrote = await this.upsertTranscriptEntry(ticket, transcript, {
-      technicianEmail: attendant?.email || this.serviceEmail,
-      technicianName: attendant?.name || "SM Click (automático)",
+    return {
+      status: "ok",
+      html: transcript.html,
+      date: formatDateSaoPaulo(transcript.firstMessageAt),
+      startTime: formatTimeSaoPaulo(transcript.firstMessageAt),
+      endTime: formatTimeSaoPaulo(transcript.lastMessageAt),
+      finished,
       normalHours: finished ? this.sanitizeAttendingHours(chatDetails.attending_time, ticket.id) : 0,
-      hourType: finished ? "normal" : "interna",
-    });
-
-    if (!wrote) {
-      // So acontece se `finished` era false aqui mas a versao definitiva
-      // (hour_type "normal") ja existia - retrato desatualizado da SM Click,
-      // nao um erro. Nao regride pra "ao vivo".
-      return { status: "skipped", reason: "versao_definitiva_ja_existe" };
-    }
-
-    // Sempre "synced", nunca "closed": mesmo quando `finished` e a hora ja e
-    // definitiva, esta acao nao move o Ticket de coluna (ver doc acima) - usar
-    // "closed" aqui confundiria o botao com uma acao que fecha o ticket.
-    return { status: "synced", ticketId: ticket.id };
+      technicianEmail: attendant?.email || "",
+      technicianName: attendant?.name || "",
+    };
   }
 
   /**

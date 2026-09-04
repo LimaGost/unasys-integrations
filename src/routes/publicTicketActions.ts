@@ -12,8 +12,8 @@ import type { NotificationType } from "../types/entities";
  * migradas ate agora: updateTicketStatus, createNotification,
  * recomputeTicketHours, on-ticket-created (onTicketCreated +
  * criarClienteAoNovoTicket - ver TicketCreationHooks.ts), e
- * smclick-sync-transcript (botao "Buscar conversa do WhatsApp" - ver
- * SmclickIntegrationService.syncTranscriptOnDemand). Ainda falta
+ * smclick-transcript-preview (botao "Buscar conversa do WhatsApp" - ver
+ * SmclickIntegrationService.getTranscriptPreview). Ainda falta
  * executeAutomationRules isolado.
  */
 const NOTIFICATION_TYPES: readonly NotificationType[] = [
@@ -226,13 +226,13 @@ router.post(
 
 /**
  * Botao "Buscar conversa do WhatsApp" na tela do Ticket (so aparece quando
- * external_system === "smclick") - pedido do usuario em 2026-09-04, pra
- * puxar o historico sob demanda em vez de so esperar a sincronizacao
- * automatica (webhook new-chat-message, a cada 45s) ou o fechamento do
- * atendimento. Ver SmclickIntegrationService.syncTranscriptOnDemand.
+ * external_system === "smclick") - pedido do usuario em 2026-09-04. SO
+ * LEITURA (nao grava nada) - devolve o HTML da conversa pro frontend colar
+ * no editor "Relato da Atividade" da aba Novo Registro; o analista revisa e
+ * salva o Registro ele mesmo. Ver SmclickIntegrationService.getTranscriptPreview.
  */
 router.post(
-  "/smclick-sync-transcript",
+  "/smclick-transcript-preview",
   asyncHandler(async (req: Request, res: Response) => {
     if (!requireToken(req, res)) return;
 
@@ -242,7 +242,7 @@ router.post(
       return;
     }
 
-    const result = await smclickIntegrationService.syncTranscriptOnDemand(ticketId);
+    const result = await smclickIntegrationService.getTranscriptPreview(ticketId);
     res.status(200).json(result);
   })
 );
