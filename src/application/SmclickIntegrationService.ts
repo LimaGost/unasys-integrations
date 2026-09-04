@@ -2,8 +2,7 @@ import { ClientRepository } from "../infrastructure/base44/ClientRepository";
 import { KanbanConfigRepository } from "../infrastructure/base44/KanbanConfigRepository";
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
-import { DEFAULT_STATUS_COLUMN } from "../services/base44Entities";
-import type { ClientRecord, TicketRecord } from "../types/entities";
+import type { ClientRecord, KanbanColumn, TicketRecord } from "../types/entities";
 import type { TicketActionsService } from "./TicketActionsService";
 import type { TicketCreationHooks } from "./TicketCreationHooks";
 
@@ -20,18 +19,28 @@ export type SmclickEventResult =
   | { status: "skipped"; reason: string };
 
 /**
- * Departamento SM Click -> codigo de vertical do Unasys Tickets (ver
- * VALID_VERTICAL_CODES em services/base44Entities.ts - so "food"/"farma"/
- * "retail" aparecem no quadro). "Degust" nao tem codigo proprio no Base44;
- * mapeado para "food" a pedido do usuario (confirmado em 2026-09-04) - se um
- * novo departamento for criado na SM Click, adicione a linha aqui, senao os
- * atendimentos daquele departamento caem em "departamento_nao_mapeado" e
- * NENHUM ticket e criado (ver handleChatStarted).
+ * Departamento SM Click -> (vertical, ticket_type) do Unasys Tickets. O
+ * ticket_type PRECISA bater exatamente com um KanbanConfig
+ * (main_type=suporte) real no Base44, senao o Ticket criado fica orfao -
+ * existe no banco mas nao aparece em nenhuma coluna do quadro (foi exatamente
+ * o que aconteceu no primeiro teste real, em 2026-09-04: ticket_type
+ * "Suporte" generico nao batia com nenhum KanbanConfig configurado).
+ * Confirmado direto no Base44 (entity KanbanConfig) nesta mesma data:
+ *   - retail -> "SUPORTE RETAIL" (unico tipo generico de atendimento la)
+ *   - food   -> "Suporte - Food" (idem)
+ *   - farma  -> NAO tem tipo generico ainda, so "Consultoria" - usado aqui a
+ *               pedido do usuario ate existir um tipo dedicado
+ * "Degust" nao tem codigo de vertical proprio no Base44 (ver
+ * VALID_VERTICAL_CODES em services/base44Entities.ts); mapeado para "food".
+ * Se um novo departamento for criado na SM Click, ou um KanbanConfig for
+ * renomeado no Base44, atualize aqui - senao os atendimentos caem em
+ * "departamento_nao_mapeado" ou "coluna_inicial_nao_configurada" e NENHUM
+ * ticket e criado (ver handleChatStarted).
  */
-const DEPARTMENT_VERTICAL: Record<string, string> = {
-  "3f3e80af-691b-4808-9863-fabb4cf8074b": "retail", // Retail
-  "2692b4df-7ff7-4749-9388-b21bdf2849a0": "food", // Degust
-  "943fdfc9-5377-4422-8880-58c3f849f96d": "farma", // Farma
+const DEPARTMENT_TICKET_TYPE: Record<string, { vertical: string; ticketType: string }> = {
+  "3f3e80af-691b-4808-9863-fabb4cf8074b": { vertical: "retail", ticketType: "SUPORTE RETAIL" }, // Retail
+  "2692b4df-7ff7-4749-9388-b21bdf2849a0": { vertical: "food", ticketType: "Suporte - Food" }, // Degust
+  "943fdfc9-5377-4422-8880-58c3f849f96d": { vertical: "farma", ticketType: "Consultoria" }, // Farma
 };
 
 /**
@@ -90,9 +99,18 @@ export class SmclickIntegrationService {
         return { status: "skipped", reason: "ticket_ja_existe" };
       }
 
-      const vertical = chat.department?.id ? DEPARTMENT_VERTICAL[chat.department.id] : undefined;
-      if (!vertical) {
+      const mapping = chat.department?.id ? DEPARTMENT_TICKET_TYPE[chat.department.id] : undefined;
+      if (!mapping) {
         return { status: "skipped", reason: `departamento_nao_mapeado:${chat.department?.id ?? chat.department?.name ?? "?"}` };
+      }
+      const { vertical, ticketType } = mapping;
+
+      const initialColumn = await this.findInitialColumn(vertical, ticketType);
+      if (!initialColumn) {
+        // Nao adivinha um titulo de coluna (ver findFinalColumn) - sem uma
+        // coluna configurada pra essa combinacao de vertical/tipo no Base44,
+        // nao cria o ticket (ele ficaria orfao, sem aparecer no quadro).
+        return { status: "skipped", reason: `coluna_inicial_nao_configurada:${vertical}/${ticketType}` };
       }
 
       const contactName = chat.contact.name || chat.contact.telephone;
@@ -106,15 +124,15 @@ export class SmclickIntegrationService {
         client_email: client.email,
         vertical,
         urgency: "media",
-        ticket_type: "Suporte",
+        ticket_type: ticketType,
         requester: contactName,
         description: `Ticket criado automaticamente a partir de um novo atendimento no WhatsApp (SM Click), protocolo #${chat.protocol ?? "?"}.`,
         external_system: "smclick",
         external_reference: chat.id,
         external_customer_code: chat.protocol ? String(chat.protocol) : undefined,
-        // Sem isto, o ticket existe no banco mas nao aparece em nenhuma coluna do Kanban (ver DEFAULT_STATUS_COLUMN).
-        status_column_id: DEFAULT_STATUS_COLUMN,
-        status_column_title: DEFAULT_STATUS_COLUMN,
+        // Coluna real do KanbanConfig (nao um valor fixo) - ver findInitialColumn.
+        status_column_id: initialColumn.title,
+        status_column_title: initialColumn.title,
       });
 
       await this.ticketEvents.create({
@@ -192,12 +210,21 @@ export class SmclickIntegrationService {
     });
   }
 
-  private async findFinalColumn(ticket: TicketRecord) {
-    const config = await this.kanbanConfigs.findOne({
-      main_type: ticket.main_type,
-      vertical: ticket.vertical,
-      ticket_type: ticket.ticket_type,
-    });
-    return config?.columns?.find((col) => col.is_final) ?? null;
+  private async findFinalColumn(ticket: TicketRecord): Promise<KanbanColumn | null> {
+    const columns = await this.findColumns(ticket.vertical, ticket.ticket_type ?? "", ticket.main_type);
+    return columns.find((col) => col.is_final) ?? null;
+  }
+
+  /** Coluna de menor `order` que nao seja final - onde um Ticket novo deve entrar. */
+  private async findInitialColumn(vertical: string, ticketType: string): Promise<KanbanColumn | null> {
+    const columns = await this.findColumns(vertical, ticketType, "suporte");
+    const nonFinal = columns.filter((col) => !col.is_final);
+    if (nonFinal.length === 0) return null;
+    return nonFinal.reduce((lowest, col) => ((col.order ?? 0) < (lowest.order ?? 0) ? col : lowest));
+  }
+
+  private async findColumns(vertical: string, ticketType: string, mainType: string): Promise<KanbanColumn[]> {
+    const config = await this.kanbanConfigs.findOne({ main_type: mainType, vertical, ticket_type: ticketType });
+    return config?.columns ?? [];
   }
 }
