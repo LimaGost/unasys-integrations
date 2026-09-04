@@ -30,28 +30,54 @@ export function formatTimeSaoPaulo(date: Date): string {
   return formatTime(date);
 }
 
-/** Cores no estilo WhatsApp: recebida (cliente) = cinza claro, enviada (atendente/bot) = verde claro. */
-const BUBBLE_BG_RECEIVED = "#f0f0f0";
-const BUBBLE_BG_SENT = "#d9fdd3";
+/**
+ * Cores no estilo WhatsApp modo escuro (o editor do ticket usa tema escuro -
+ * fundo claro com texto escuro herdado ficava ilegivel, reportado pelo
+ * usuario em 2026-09-04): recebida (cliente) = cinza escuro, enviada
+ * (atendente/bot) = verde escuro, texto claro nos dois - a cor do texto e
+ * setada explicitamente (nao herda do editor), senao fica ilegivel de novo
+ * se algum dia o tema mudar.
+ */
+const BUBBLE_BG_RECEIVED = "#1f2c34";
+const BUBBLE_BG_SENT = "#025c4b";
+const BUBBLE_TEXT_COLOR = "#e9edef";
+const BUBBLE_META_COLOR = "#a3adb3";
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
- * Uma "bolha" por mensagem - alinhada a esquerda (cliente, cinza) ou a
- * direita (atendente/bot, verde), pra parecer o mais possivel com um print
- * do WhatsApp. So mapeia os tipos ja confirmados numa conversa real (texto e
- * menu de lista do bot - ver SmclickIntegrationService); tipos de midia
- * (imagem/audio/arquivo/template) ainda nao foram confirmados na API real,
- * entao NAO inventa o nome do campo de conteudo deles - so marca que uma
- * mensagem daquele tipo existiu, pra nao quebrar nem mostrar informacao
- * errada.
+ * A SM Click as vezes embute "*Nome*:" no INICIO do texto de mensagens
+ * enviadas por um atendente (confirmado em dados reais, ex: "*IURY LIMA*:\n\nola")
+ * - como o nome ja aparece no cabecalho da bolha (`who`), remove esse
+ * prefixo repetido do corpo da mensagem pra nao duplicar (reportado pelo
+ * usuario em 2026-09-04: "ficou muito ruim" com o nome duas vezes).
+ */
+function stripSelfNamePrefix(text: string, who: string): string {
+  const pattern = new RegExp(`^\\*${escapeRegExp(who)}\\*:\\s*`, "i");
+  return text.replace(pattern, "").trim();
+}
+
+/**
+ * Uma "bolha" por mensagem - alinhada a esquerda (cliente, cinza escuro) ou
+ * a direita (atendente/bot, verde escuro), pra parecer o mais possivel com
+ * um print do WhatsApp (modo escuro, pra combinar com o tema do editor). So
+ * mapeia os tipos ja confirmados numa conversa real (texto e menu de lista
+ * do bot - ver SmclickIntegrationService); tipos de midia (imagem/audio/
+ * arquivo/template) ainda nao foram confirmados na API real, entao NAO
+ * inventa o nome do campo de conteudo deles - so marca que uma mensagem
+ * daquele tipo existiu, pra nao quebrar nem mostrar informacao errada.
  *
  * IMPORTANTE: este HTML e colado no editor de texto rico (Quill) da tela do
  * Ticket, que SO entende um conjunto limitado de formatacao (paragrafo,
- * negrito/italico, alinhamento, cor de fundo do texto) - qualquer coisa fora
- * disso (div, flexbox, padding, border-radius, cantos arredondados) e
- * descartada quando o Quill reprocessa o HTML. Por isso a "bolha" aqui e
- * simulada com <p align> + <span style="background-color">, os unicos dois
- * recursos que sobrevivem ao editor - nao da pra ter bolha com canto
- * arredondado/avatar de verdade dentro dele.
+ * negrito/italico, alinhamento via `text-align`, cor/cor de fundo do texto
+ * via <span style>) - qualquer coisa fora disso (div, flexbox, padding,
+ * border-radius, cantos arredondados, o atributo HTML `align=`) e descartada
+ * quando o Quill reprocessa o HTML. Por isso a "bolha" aqui e simulada com
+ * `<p style="text-align">` + `<span style="color;background-color">`, os
+ * unicos recursos que realmente sobrevivem ao editor - nao da pra ter bolha
+ * com canto arredondado/avatar de verdade dentro dele.
  */
 function messageLine(msg: SmclickMessage, contactName: string, time: string): string | null {
   // Eventos internos (chat-started, chat-waiting, etc) - nao e conversa "falada".
@@ -64,7 +90,9 @@ function messageLine(msg: SmclickMessage, contactName: string, time: string): st
 
   let body: string | null = null;
   if (msg.type === "text") {
-    const text = typeof msg.content?.text === "string" ? msg.content.text.trim() : "";
+    const rawText = typeof msg.content?.text === "string" ? msg.content.text.trim() : "";
+    if (!rawText) return null;
+    const text = sentByMe ? stripSelfNamePrefix(rawText, who) : rawText;
     if (!text) return null;
     body = escapeHtml(text);
   } else if (msg.type === "list") {
@@ -75,9 +103,9 @@ function messageLine(msg: SmclickMessage, contactName: string, time: string): st
   }
 
   return (
-    `<p align="${align}" style="margin:6px 0;">` +
-    `<span style="background-color:${bg};">` +
-    `<strong>${escapeHtml(who)}</strong> <span style="color:#667781;">[${time}]</span><br>${body}` +
+    `<p style="text-align:${align};margin:6px 0;">` +
+    `<span style="background-color:${bg};color:${BUBBLE_TEXT_COLOR};">` +
+    `<strong>${escapeHtml(who)}</strong> <span style="color:${BUBBLE_META_COLOR};">[${time}]</span><br>${body}` +
     `</span></p>`
   );
 }
