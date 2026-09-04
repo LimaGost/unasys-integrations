@@ -30,34 +30,56 @@ export function formatTimeSaoPaulo(date: Date): string {
   return formatTime(date);
 }
 
+/** Cores no estilo WhatsApp: recebida (cliente) = cinza claro, enviada (atendente/bot) = verde claro. */
+const BUBBLE_BG_RECEIVED = "#f0f0f0";
+const BUBBLE_BG_SENT = "#d9fdd3";
+
 /**
- * Uma linha por mensagem, no formato "[HH:mm] Quem: texto". So mapeia os
- * tipos ja confirmados numa conversa real (texto e menu de lista do bot -
- * ver SmclickIntegrationService); tipos de midia (imagem/audio/arquivo/
- * template) ainda nao foram confirmados na API real, entao NAO inventa o
- * nome do campo de conteudo deles - so marca que uma mensagem daquele tipo
- * existiu, pra nao quebrar nem mostrar informacao errada.
+ * Uma "bolha" por mensagem - alinhada a esquerda (cliente, cinza) ou a
+ * direita (atendente/bot, verde), pra parecer o mais possivel com um print
+ * do WhatsApp. So mapeia os tipos ja confirmados numa conversa real (texto e
+ * menu de lista do bot - ver SmclickIntegrationService); tipos de midia
+ * (imagem/audio/arquivo/template) ainda nao foram confirmados na API real,
+ * entao NAO inventa o nome do campo de conteudo deles - so marca que uma
+ * mensagem daquele tipo existiu, pra nao quebrar nem mostrar informacao
+ * errada.
+ *
+ * IMPORTANTE: este HTML e colado no editor de texto rico (Quill) da tela do
+ * Ticket, que SO entende um conjunto limitado de formatacao (paragrafo,
+ * negrito/italico, alinhamento, cor de fundo do texto) - qualquer coisa fora
+ * disso (div, flexbox, padding, border-radius, cantos arredondados) e
+ * descartada quando o Quill reprocessa o HTML. Por isso a "bolha" aqui e
+ * simulada com <p align> + <span style="background-color">, os unicos dois
+ * recursos que sobrevivem ao editor - nao da pra ter bolha com canto
+ * arredondado/avatar de verdade dentro dele.
  */
 function messageLine(msg: SmclickMessage, contactName: string, time: string): string | null {
   // Eventos internos (chat-started, chat-waiting, etc) - nao e conversa "falada".
   if (msg.type === "system") return null;
 
-  const who = msg.from_me ? msg.sent_by?.name || "Bot/Automação" : contactName;
+  const sentByMe = msg.from_me;
+  const who = sentByMe ? msg.sent_by?.name || "Bot/Automação" : contactName;
+  const align = sentByMe ? "right" : "left";
+  const bg = sentByMe ? BUBBLE_BG_SENT : BUBBLE_BG_RECEIVED;
 
+  let body: string | null = null;
   if (msg.type === "text") {
     const text = typeof msg.content?.text === "string" ? msg.content.text.trim() : "";
     if (!text) return null;
-    return `<p><strong>${escapeHtml(who)}</strong> <span style="color:#888888">[${time}]</span>: ${escapeHtml(text)}</p>`;
-  }
-
-  if (msg.type === "list") {
+    body = escapeHtml(text);
+  } else if (msg.type === "list") {
     const description = typeof msg.content?.description === "string" ? msg.content.description.trim() : "";
-    return `<p><em>${escapeHtml(who)}</em> <span style="color:#888888">[${time}]</span>: ${
-      description ? escapeHtml(description) : "[menu de opções]"
-    }</p>`;
+    body = description ? escapeHtml(description) : "[menu de opções]";
+  } else {
+    body = `[mensagem tipo "${escapeHtml(msg.type)}"]`;
   }
 
-  return `<p><strong>${escapeHtml(who)}</strong> <span style="color:#888888">[${time}]</span>: [mensagem tipo "${escapeHtml(msg.type)}"]</p>`;
+  return (
+    `<p align="${align}" style="margin:6px 0;">` +
+    `<span style="background-color:${bg};">` +
+    `<strong>${escapeHtml(who)}</strong> <span style="color:#667781;">[${time}]</span><br>${body}` +
+    `</span></p>`
+  );
 }
 
 /**
