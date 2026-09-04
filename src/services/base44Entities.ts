@@ -83,6 +83,14 @@ export function getEntities(client: Base44Client): Base44Entities {
  * Busca um Client existente por CNPJ e/ou email; cria um novo se nao achar
  * nenhum. `Ticket.client_id` deve usar o `id` retornado aqui - nao o
  * CNPJ/email cru (ver comentario em types/entities.ts).
+ *
+ * Quando `lookup.cnpj` e informado, ele e a chave definitiva e NAO cai para
+ * o e-mail se nao achar match: confirmado em producao que franquias (ex:
+ * MISS MAKE) usam o mesmo e-mail de contato comercial/coordenador para
+ * varias lojas, cada uma com seu proprio CNPJ. Caindo para o e-mail, uma
+ * implantacao nova de uma loja X era associada ao Client de uma loja Y
+ * (CNPJ diferente) so por compartilhar o mesmo e-mail - varios Tickets de
+ * lojas distintas ficaram apontando para um unico Client errado.
  */
 export async function findOrCreateClient(
   entities: Base44Entities,
@@ -91,7 +99,7 @@ export async function findOrCreateClient(
 ): Promise<ClientRecord> {
   if (lookup.cnpj) {
     const existing = await entities.Client.filter({ cnpj: lookup.cnpj }, undefined, 1);
-    if (existing[0]) return existing[0];
+    return existing[0] ?? entities.Client.create(createData);
   }
   if (lookup.email) {
     const existing = await entities.Client.filter({ email: lookup.email }, undefined, 1);
