@@ -29,6 +29,26 @@ function tokenMatches(provided: string, expected: string): boolean {
   return timingSafeEqual(providedBuf, expectedBuf);
 }
 
+/** Mascara o telefone nos logs (so os ultimos 4 digitos) - o resto do payload de log nao tem PII. */
+function maskPhone(phone: string | undefined): string {
+  if (!phone) return "?";
+  return phone.length > 4 ? `***${phone.slice(-4)}` : phone;
+}
+
+/**
+ * Log de cada evento recebido - essencial pra depurar esta integracao nova
+ * (o log padrao de acesso so grava tamanho da resposta, nao da pra saber
+ * pelo painel/log comum se um chat-started foi ignorado e por que).
+ */
+function logEvent(body: { event?: string; infos?: { chat?: SmclickChat } }, result: unknown): void {
+  const chat = body.infos?.chat;
+  console.log(
+    `[smclick] evento=${body.event ?? "?"} chat_id=${chat?.id ?? "?"} protocolo=${chat?.protocol ?? "?"} ` +
+      `departamento=${chat?.department?.id ?? "?"}(${chat?.department?.name ?? "?"}) telefone=${maskPhone(chat?.contact?.telephone)} ` +
+      `resultado=${JSON.stringify(result)}`
+  );
+}
+
 router.post(
   "/:token",
   asyncHandler(async (req: Request, res: Response) => {
@@ -50,23 +70,29 @@ router.post(
     const chat = body.infos?.chat;
 
     if (!chat) {
-      res.status(200).json({ status: "ignored", reason: "sem_chat_no_payload", event: body.event });
+      const result = { status: "ignored", reason: "sem_chat_no_payload", event: body.event };
+      logEvent(body, result);
+      res.status(200).json(result);
       return;
     }
 
     if (body.event === "chat-started") {
       const result = await smclickIntegrationService.handleChatStarted(chat);
+      logEvent(body, result);
       res.status(200).json(result);
       return;
     }
 
     if (body.event === "chat-finished") {
       const result = await smclickIntegrationService.handleChatFinished(chat);
+      logEvent(body, result);
       res.status(200).json(result);
       return;
     }
 
-    res.status(200).json({ status: "ignored", event: body.event });
+    const result = { status: "ignored", event: body.event };
+    logEvent(body, result);
+    res.status(200).json(result);
   })
 );
 
