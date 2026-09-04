@@ -128,6 +128,16 @@ export class SmclickIntegrationService {
    */
   private readonly transcriptLocks = new Map<string, Promise<void>>();
 
+  /**
+   * Ids de ticket com um fechamento smclick em andamento agora mesmo - evita
+   * que o fechamento automatico (webhook chat-finished) e o fechamento
+   * manual (closeTicketIfSmclickFinished, chamado logo apos salvar o
+   * Registro) rodem ao mesmo tempo pro mesmo ticket e dupliquem o
+   * status_change/notificacao/automation rules (achado de code-review em
+   * 2026-09-04). Ver closeToFinalColumn.
+   */
+  private readonly ticketsBeingClosed = new Set<string>();
+
   constructor(
     private readonly tickets: TicketRepository,
     private readonly ticketEvents: TicketEventRepository,
@@ -235,24 +245,13 @@ export class SmclickIntegrationService {
         return { status: "skipped", reason: "ticket_ja_fechado" };
       }
 
-      const finalColumn = await this.findFinalColumn(ticket);
-      if (!finalColumn) {
-        // Nao adivinha um titulo de coluna: sem uma coluna is_final configurada
-        // pra essa combinacao de vertical/tipo, o ticket fica aberto mesmo (mais
-        // seguro do que fechar numa coluna que nao existe pra esse quadro).
-        return { status: "skipped", reason: "coluna_final_nao_configurada" };
-      }
-
-      // Traz o historico ANTES de fechar - TicketActionsService.updateStatus
-      // agora EXIGE um Registro de transcript ja gravado pra fechar um ticket
-      // smclick (regra obrigatoria de fechamento, pedido do usuario em
-      // 2026-09-04); se a ordem fosse a antiga (fechar primeiro, anexar
-      // depois "best-effort"), esse fechamento automatico ia sempre esbarrar
-      // no proprio guard e nunca fechar sozinho (achado de code-review no
-      // mesmo dia). Se nao der pra trazer nada (API fora do ar, protocolo
-      // ausente, ou atendimento sem nenhuma mensagem de texto), NAO fecha -
-      // fica pro analista trazer manualmente (botao "Buscar conversa do
-      // WhatsApp") e fechar o ticket ele mesmo depois.
+      // Traz o historico ANTES de fechar - garante que closeToFinalColumn so
+      // roda com o Registro do transcript ja gravado. Se nao der pra trazer
+      // nada (API fora do ar, protocolo ausente, ou atendimento sem nenhuma
+      // mensagem de texto), NAO fecha - fica pro analista trazer manualmente
+      // (botao "Buscar conversa do WhatsApp") e fechar o ticket ele mesmo
+      // depois (ver closeTicketIfSmclickFinished, mesmo botao ja fecha
+      // sozinho se o atendimento estiver finalizado).
       let transcriptAttached = false;
       try {
         transcriptAttached = await this.attachConversationTranscript(ticket, chat);
@@ -263,36 +262,7 @@ export class SmclickIntegrationService {
         return { status: "skipped", reason: "sem_historico_para_anexar" };
       }
 
-      const result = await this.ticketActions.updateStatus(
-        {
-          ticketId: ticket.id,
-          newStatus: finalColumn.title,
-          columnData: {
-            id: finalColumn.title,
-            is_final: true,
-            pauses_sla: finalColumn.pauses_sla,
-            sla_hours: finalColumn.sla_hours,
-          },
-        },
-        { email: this.serviceEmail, name: "SM Click (automatico)" }
-      );
-
-      // updateStatus pula silenciosamente (sem tocar closed_at) quando o titulo
-      // atual ja bate com o da coluna final - nao reportar "closed" nesse caso,
-      // senao a SM Click acha que fechou e o ticket continua aberto de verdade.
-      if (result.skipped) {
-        return { status: "skipped", reason: `update_status_pulou:${result.reason}` };
-      }
-
-      // Chat encerrado - nao ha mais o que sincronizar ao vivo pra ele
-      // (handleNewChatMessage so age em tickets ainda abertos, ver acima),
-      // entao esse chat.id nunca mais vai ser reescrito aqui. Sem isto,
-      // lastLiveSyncAt cresceria sem limite (uma entrada por conversa da
-      // SM Click, pra sempre, ja que este servico roda como processo unico
-      // e nunca reinicia sozinho).
-      this.lastLiveSyncAt.delete(chat.id);
-
-      return { status: "closed", ticketId: ticket.id };
+      return await this.closeToFinalColumn(ticket, { email: this.serviceEmail, name: "SM Click (automatico)" });
     } finally {
       this.chatsBeingFinished.delete(chat.id);
     }
@@ -437,6 +407,107 @@ export class SmclickIntegrationService {
       technicianEmail: attendant?.email || "",
       technicianName: attendant?.name || "",
     };
+  }
+
+  /**
+   * Fecha o ticket como consequencia direta de salvar o Registro do
+   * historico do WhatsApp - chamado pelo frontend (ActivityPanel.jsx) logo
+   * apos o analista salvar um Registro que veio do botao "Buscar conversa do
+   * WhatsApp" com o atendimento ja finalizado na SM Click. Pedido do usuario
+   * em 2026-09-04: nao bloquear o fechamento manual generico no Kanban (isso
+   * ficou redundante com o fechamento automatico do proprio chat-finished) -
+   * em vez disso, o gatilho de fechamento passa a ser o SALVAMENTO do
+   * Registro com o historico, tanto pelo caminho automatico (handleChatFinished)
+   * quanto por este aqui (sob demanda).
+   *
+   * Reconfirma o status do atendimento DIRETO na API da SM Click (nao confia
+   * soh no que o frontend diz) e exige que o Registro com o transcript ja
+   * esteja gravado - as duas travas que garantem que isto so fecha um ticket
+   * que realmente tem o historico da conversa anexado.
+   */
+  async closeTicketIfSmclickFinished(ticketId: string, actor: { email: string; name: string }): Promise<SmclickEventResult> {
+    const ticket = await this.tickets.findById(ticketId);
+    if (!ticket) {
+      return { status: "skipped", reason: "ticket_nao_encontrado" };
+    }
+    if (ticket.external_system !== "smclick" || !ticket.external_customer_code) {
+      return { status: "skipped", reason: "ticket_nao_e_do_smclick" };
+    }
+    if (ticket.closed_at) {
+      return { status: "skipped", reason: "ja_fechado" };
+    }
+
+    const protocol = Number(ticket.external_customer_code);
+    if (!Number.isFinite(protocol)) {
+      return { status: "skipped", reason: "protocolo_invalido" };
+    }
+
+    // As duas chamadas sao independentes (uma na API da SM Click, outra no
+    // Base44) - rodar em paralelo em vez de serie evita somar as duas
+    // latencias numa acao que o analista esta esperando na tela.
+    const [chatDetails, entries] = await Promise.all([this.smclickApi.getChatByProtocol(protocol), this.timeEntries.findByTicket(ticketId)]);
+
+    if (!chatDetails || chatDetails.status !== "finished") {
+      return { status: "skipped", reason: "atendimento_ainda_em_andamento" };
+    }
+
+    const hasTranscript = entries.some((e) => typeof e.description === "string" && e.description.startsWith(TRANSCRIPT_HEADER_PREFIX));
+    if (!hasTranscript) {
+      return { status: "skipped", reason: "sem_historico_anexado" };
+    }
+
+    return this.closeToFinalColumn(ticket, actor);
+  }
+
+  /** Acha a coluna final do quadro do ticket e fecha - compartilhado entre handleChatFinished (automatico) e closeTicketIfSmclickFinished (manual), serializado por ticket.id via ticketsBeingClosed. */
+  private async closeToFinalColumn(ticket: TicketRecord, actor: { email: string; name: string }): Promise<SmclickEventResult> {
+    if (this.ticketsBeingClosed.has(ticket.id)) {
+      return { status: "skipped", reason: "fechamento_em_andamento" };
+    }
+    this.ticketsBeingClosed.add(ticket.id);
+
+    try {
+      const finalColumn = await this.findFinalColumn(ticket);
+      if (!finalColumn) {
+        // Nao adivinha um titulo de coluna: sem uma coluna is_final configurada
+        // pra essa combinacao de vertical/tipo, o ticket fica aberto mesmo (mais
+        // seguro do que fechar numa coluna que nao existe pra esse quadro).
+        return { status: "skipped", reason: "coluna_final_nao_configurada" };
+      }
+
+      const result = await this.ticketActions.updateStatus(
+        {
+          ticketId: ticket.id,
+          newStatus: finalColumn.title,
+          columnData: {
+            id: finalColumn.title,
+            is_final: true,
+            pauses_sla: finalColumn.pauses_sla,
+            sla_hours: finalColumn.sla_hours,
+          },
+        },
+        actor
+      );
+
+      // updateStatus pula silenciosamente (sem tocar closed_at) quando o titulo
+      // atual ja bate com o da coluna final - nao reportar "closed" nesse caso,
+      // senao o chamador acha que fechou e o ticket continua aberto de verdade.
+      if (result.skipped) {
+        return { status: "skipped", reason: `update_status_pulou:${result.reason}` };
+      }
+
+      // Chat encerrado - nao ha mais o que sincronizar ao vivo pra ele
+      // (handleNewChatMessage so age em tickets ainda abertos), entao esse
+      // chat.id nunca mais vai ser reescrito aqui. Sem isto, lastLiveSyncAt
+      // cresceria sem limite (uma entrada por conversa da SM Click, pra
+      // sempre, ja que este servico roda como processo unico e nunca
+      // reinicia sozinho).
+      if (ticket.external_reference) this.lastLiveSyncAt.delete(ticket.external_reference);
+
+      return { status: "closed", ticketId: ticket.id };
+    } finally {
+      this.ticketsBeingClosed.delete(ticket.id);
+    }
   }
 
   /**
