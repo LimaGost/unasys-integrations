@@ -243,6 +243,26 @@ export class SmclickIntegrationService {
         return { status: "skipped", reason: "coluna_final_nao_configurada" };
       }
 
+      // Traz o historico ANTES de fechar - TicketActionsService.updateStatus
+      // agora EXIGE um Registro de transcript ja gravado pra fechar um ticket
+      // smclick (regra obrigatoria de fechamento, pedido do usuario em
+      // 2026-09-04); se a ordem fosse a antiga (fechar primeiro, anexar
+      // depois "best-effort"), esse fechamento automatico ia sempre esbarrar
+      // no proprio guard e nunca fechar sozinho (achado de code-review no
+      // mesmo dia). Se nao der pra trazer nada (API fora do ar, protocolo
+      // ausente, ou atendimento sem nenhuma mensagem de texto), NAO fecha -
+      // fica pro analista trazer manualmente (botao "Buscar conversa do
+      // WhatsApp") e fechar o ticket ele mesmo depois.
+      let transcriptAttached = false;
+      try {
+        transcriptAttached = await this.attachConversationTranscript(ticket, chat);
+      } catch (error) {
+        console.error(`[smclick] falha ao anexar transcript da conversa (ticket ${ticket.id}):`, error);
+      }
+      if (!transcriptAttached) {
+        return { status: "skipped", reason: "sem_historico_para_anexar" };
+      }
+
       const result = await this.ticketActions.updateStatus(
         {
           ticketId: ticket.id,
@@ -262,16 +282,6 @@ export class SmclickIntegrationService {
       // senao a SM Click acha que fechou e o ticket continua aberto de verdade.
       if (result.skipped) {
         return { status: "skipped", reason: `update_status_pulou:${result.reason}` };
-      }
-
-      // Best-effort: o fechamento do ticket ja aconteceu (acima) e e o que
-      // importa pra SM Click - se o transcript falhar (API fora do ar, etc),
-      // so loga e reporta "closed" do mesmo jeito, sem fazer a SM Click
-      // reenviar o webhook achando que o fechamento falhou.
-      try {
-        await this.attachConversationTranscript(ticket, chat);
-      } catch (error) {
-        console.error(`[smclick] falha ao anexar transcript da conversa (ticket ${ticket.id}):`, error);
       }
 
       // Chat encerrado - nao ha mais o que sincronizar ao vivo pra ele
@@ -446,12 +456,13 @@ export class SmclickIntegrationService {
    * horas TEM que contar nos relatorios do analista, por isso hour_type e
    * "normal" (nao "interna") e normal_hours reflete o attending_time real.
    */
-  private async attachConversationTranscript(ticket: TicketRecord, chat: SmclickChat): Promise<void> {
-    if (!chat.protocol) return;
+  /** Retorna false quando nao ha nada pra anexar (sem protocolo, ou atendimento sem nenhuma mensagem de texto) - ver handleChatFinished, que usa isso pra decidir se fecha o ticket. */
+  private async attachConversationTranscript(ticket: TicketRecord, chat: SmclickChat): Promise<boolean> {
+    if (!chat.protocol) return false;
 
     const messages = await this.smclickApi.getChatMessages(chat.protocol);
     const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente", true);
-    if (!resolved.firstMessageAt || !resolved.lastMessageAt) return;
+    if (!resolved.firstMessageAt || !resolved.lastMessageAt) return false;
     const content = await this.renderTranscriptContent(ticket.id, resolved, true);
 
     const attendant = resolvePrincipalAttendant(chat);
@@ -464,13 +475,24 @@ export class SmclickIntegrationService {
       hourType: "normal",
     });
 
-    await this.ticketEvents.create({
-      ticket_id: ticket.id,
-      type: "field_change",
-      description: "Histórico da conversa do WhatsApp (SM Click) anexado automaticamente ao ticket.",
-      user_email: this.serviceEmail,
-      visible_to_client: false,
-    });
+    // O Registro do transcript ja esta gravado nesse ponto - isso e o que o
+    // guard de fechamento obrigatorio (TicketActionsService.updateStatus)
+    // verifica. Este evento e so log/auditoria complementar: uma falha aqui
+    // (rede, etc) nao pode fazer o chamador achar que nada foi anexado e
+    // deixar o ticket preso sem fechar (achado de code-review em 2026-09-04).
+    try {
+      await this.ticketEvents.create({
+        ticket_id: ticket.id,
+        type: "field_change",
+        description: "Histórico da conversa do WhatsApp (SM Click) anexado automaticamente ao ticket.",
+        user_email: this.serviceEmail,
+        visible_to_client: false,
+      });
+    } catch (error) {
+      console.error(`[smclick] falha ao registrar evento de anexo do transcript (ticket ${ticket.id}):`, error);
+    }
+
+    return true;
   }
 
   /**
@@ -551,8 +573,16 @@ export class SmclickIntegrationService {
       }
 
       // Sem isto, total_normal_hours do ticket nao reflete o Registro
-      // recem-criado/atualizado (ver TicketActionsService.recomputeHours).
-      await this.ticketActions.recomputeHours(ticket.id);
+      // recem-criado/atualizado (ver TicketActionsService.recomputeHours). O
+      // Registro em si ja foi gravado acima - uma falha so no recalculo nao
+      // pode fazer o chamador (attachConversationTranscript) achar que nada
+      // foi anexado e travar o fechamento obrigatorio do ticket por causa
+      // disso (achado de code-review em 2026-09-04).
+      try {
+        await this.ticketActions.recomputeHours(ticket.id);
+      } catch (error) {
+        console.error(`[smclick] falha ao recalcular horas apos anexar transcript (ticket ${ticket.id}):`, error);
+      }
       return true;
     });
   }

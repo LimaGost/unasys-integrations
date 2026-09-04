@@ -5,6 +5,7 @@ import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepositor
 import type { TicketRecord } from "../types/entities";
 import type { EmailService } from "./EmailService";
 import type { NotificationService } from "./NotificationService";
+import { TRANSCRIPT_HEADER_PREFIX } from "./smclickTranscript";
 import type { TicketAutomationEngine } from "./TicketAutomationEngine";
 
 export interface TicketActor {
@@ -98,6 +99,28 @@ export class TicketActionsService {
     }
 
     const isFinal = !!columnData?.is_final;
+
+    /**
+     * Regra obrigatoria de finalizacao (pedido do usuario em 2026-09-04):
+     * ticket vindo do SM Click (WhatsApp) so pode ser fechado depois que o
+     * historico da conversa ja foi trazido pro Registro pelo menos uma vez -
+     * seja pela sincronizacao automatica (SmclickIntegrationService,
+     * TRANSCRIPT_HEADER_PREFIX) ou pelo botao "Buscar conversa do WhatsApp"
+     * (ActivityPanel.jsx). Sem isso, um fechamento manual do card no Kanban
+     * antes do atendimento terminar no SM Click perderia a conversa pra
+     * sempre - ela so fica disponivel via API enquanto o atendimento existe.
+     */
+    if (isFinal && ticket.external_system === "smclick") {
+      const entries = await this.timeEntries.findByTicket(ticketId);
+      const hasTranscript = entries.some((e) => typeof e.description === "string" && e.description.startsWith(TRANSCRIPT_HEADER_PREFIX));
+      if (!hasTranscript) {
+        throw Object.assign(
+          new Error('Traga o histórico da conversa do WhatsApp antes de finalizar este ticket (botão "Buscar conversa do WhatsApp" na aba Novo Registro).'),
+          { status: 400 }
+        );
+      }
+    }
+
     const pausesSla = !!columnData?.pauses_sla;
     const rawSlaHours = typeof columnData?.sla_hours === "number" ? columnData.sla_hours : null;
     // SLA "real" (<= 1 ano). Valores absurdos (ex: 100000000) = SLA desativado na coluna.
