@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { notificationService, ticketActionsService, ticketCreationHooks, ticketRepository } from "../container";
+import { notificationService, smclickIntegrationService, ticketActionsService, ticketCreationHooks, ticketRepository } from "../container";
 import { getConfig } from "../services/configStore";
 import type { NotificationType } from "../types/entities";
 
@@ -11,7 +11,9 @@ import type { NotificationType } from "../types/entities";
  * cada movimentacao de card, a acao mais frequente do sistema. Funcoes
  * migradas ate agora: updateTicketStatus, createNotification,
  * recomputeTicketHours, on-ticket-created (onTicketCreated +
- * criarClienteAoNovoTicket - ver TicketCreationHooks.ts). Ainda falta
+ * criarClienteAoNovoTicket - ver TicketCreationHooks.ts), e
+ * smclick-sync-transcript (botao "Buscar conversa do WhatsApp" - ver
+ * SmclickIntegrationService.syncTranscriptOnDemand). Ainda falta
  * executeAutomationRules isolado.
  */
 const NOTIFICATION_TYPES: readonly NotificationType[] = [
@@ -219,6 +221,29 @@ router.post(
 
     await ticketCreationHooks.afterTicketCreated(ticket);
     res.status(200).json({ status: "success" });
+  })
+);
+
+/**
+ * Botao "Buscar conversa do WhatsApp" na tela do Ticket (so aparece quando
+ * external_system === "smclick") - pedido do usuario em 2026-09-04, pra
+ * puxar o historico sob demanda em vez de so esperar a sincronizacao
+ * automatica (webhook new-chat-message, a cada 45s) ou o fechamento do
+ * atendimento. Ver SmclickIntegrationService.syncTranscriptOnDemand.
+ */
+router.post(
+  "/smclick-sync-transcript",
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!requireToken(req, res)) return;
+
+    const ticketId = typeof req.body?.ticket_id === "string" ? req.body.ticket_id : "";
+    if (!ticketId) {
+      res.status(400).json({ error: "BadRequest", message: "Campo obrigatorio: ticket_id." });
+      return;
+    }
+
+    const result = await smclickIntegrationService.syncTranscriptOnDemand(ticketId);
+    res.status(200).json(result);
   })
 );
 

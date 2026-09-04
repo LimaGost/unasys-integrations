@@ -3,18 +3,11 @@ import { KanbanConfigRepository } from "../infrastructure/base44/KanbanConfigRep
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
 import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepository";
-import type { SmclickApiClient } from "../infrastructure/smclick/SmclickApiClient";
+import type { SmclickApiClient, SmclickAttendant } from "../infrastructure/smclick/SmclickApiClient";
 import type { ClientRecord, KanbanColumn, TicketRecord } from "../types/entities";
 import { buildTranscript, formatDateSaoPaulo, formatTimeSaoPaulo, TRANSCRIPT_HEADER_PREFIX, type TranscriptResult } from "./smclickTranscript";
 import type { TicketActionsService } from "./TicketActionsService";
 import type { TicketCreationHooks } from "./TicketCreationHooks";
-
-export interface SmclickAttendant {
-  id?: string;
-  name?: string;
-  email?: string;
-  principal?: boolean;
-}
 
 export interface SmclickChat {
   id?: string;
@@ -26,8 +19,13 @@ export interface SmclickChat {
   attending_time?: number;
 }
 
-/** O atendente marcado `principal` (responsavel), ou o primeiro da lista se nenhum estiver marcado. */
-function resolvePrincipalAttendant(chat: SmclickChat): SmclickAttendant | undefined {
+/**
+ * O atendente marcado `principal` (responsavel), ou o primeiro da lista se
+ * nenhum estiver marcado. Aceita tanto o payload de um webhook (SmclickChat)
+ * quanto o retrato ao vivo vindo de SmclickApiClient.getChatByProtocol
+ * (SmclickChatDetails) - so precisa do campo `attendant`.
+ */
+function resolvePrincipalAttendant(chat: { attendant?: SmclickAttendant[] }): SmclickAttendant | undefined {
   const attendants = chat.attendant ?? [];
   return attendants.find((a) => a.principal) ?? attendants[0];
 }
@@ -102,6 +100,17 @@ export class SmclickIntegrationService {
 
   /** Timestamp (Date.now()) da ultima sincronizacao ao vivo do transcript, por chat.id - ver handleNewChatMessage. */
   private readonly lastLiveSyncAt = new Map<string, number>();
+
+  /**
+   * Fila de execucao por Ticket, pra serializar as 3 formas de escrever o
+   * Registro de transcript (webhook ao vivo, chat-finished definitivo, botao
+   * sob demanda) - sem isto, duas dessas rodando quase juntas pro mesmo
+   * ticket podiam ou duplicar o Registro (as duas veem "nao existe ainda" ao
+   * mesmo tempo) ou, pior, uma sincronizacao "ao vivo" (0h) sobrescrever a
+   * versao definitiva (hora real) que acabou de ser gravada - achado real de
+   * code-review em 2026-09-04. Ver withTranscriptLock/upsertTranscriptEntry.
+   */
+  private readonly transcriptLocks = new Map<string, Promise<void>>();
 
   constructor(
     private readonly tickets: TicketRepository,
@@ -285,7 +294,7 @@ export class SmclickIntegrationService {
     // Marca ANTES de qualquer consulta - inclusive mensagens trocadas durante
     // a triagem do bot (antes do Ticket existir) ficam rate-limited, nao so
     // as que acham um ticket.
-    this.lastLiveSyncAt.set(chat.id, Date.now());
+    this.recordLiveSync(chat.id);
 
     if (!chat.protocol) {
       return { status: "skipped", reason: "payload_incompleto" };
@@ -308,35 +317,92 @@ export class SmclickIntegrationService {
         return { status: "skipped", reason: "sem_mensagens" };
       }
 
-      // Rechecagem logo antes de gravar: entre o inicio deste metodo (acima)
-      // e agora, dois `await` (getChatMessages, buildTranscript e' sincrono
-      // mas a busca de mensagens nao) deram tempo de sobra pro chat-finished
-      // deste MESMO chat rodar em paralelo, fechar o ticket e gravar a versao
-      // definitiva (com hora real) - sem isto, essa sincronizacao ao vivo
-      // (com 0h) sobrescreveria o Registro definitivo que acabou de ser
-      // gravado. Reler o ticket (nao reusar a variavel `ticket` de cima) e'
-      // essencial - e' exatamente o dado que pode ter mudado.
-      if (this.chatsBeingFinished.has(chat.id)) {
-        return { status: "skipped", reason: "fechamento_em_andamento" };
-      }
-      const freshTicket = await this.tickets.findById(ticket.id);
-      if (!freshTicket || freshTicket.closed_at) {
-        return { status: "skipped", reason: "ticket_ja_fechado" };
-      }
-
+      // upsertTranscriptEntry serializa por ticket e releem o estado mais
+      // recente antes de gravar - protege contra um chat-finished (ou o
+      // botao sob demanda) rodando quase junto pro mesmo chat. Se retornar
+      // false, a versao definitiva ja chegou primeiro - nao reportar
+      // "synced" quando na verdade nada foi escrito.
       const attendant = resolvePrincipalAttendant(chat);
-      await this.upsertTranscriptEntry(freshTicket, transcript, {
+      const wrote = await this.upsertTranscriptEntry(ticket, transcript, {
         technicianEmail: attendant?.email || this.serviceEmail,
         technicianName: attendant?.name || "SM Click (automático)",
         normalHours: 0,
         hourType: "interna",
       });
 
-      return { status: "synced", ticketId: freshTicket.id };
+      if (!wrote) {
+        return { status: "skipped", reason: "versao_definitiva_ja_existe" };
+      }
+      return { status: "synced", ticketId: ticket.id };
     } catch (error) {
       console.error(`[smclick] falha ao sincronizar transcript ao vivo (ticket ${ticket.id}):`, error);
       return { status: "skipped", reason: "falha_sincronizacao" };
     }
+  }
+
+  /**
+   * Sincronizacao SOB DEMANDA: chamada pelo botao "Buscar conversa do
+   * WhatsApp" no Ticket (Base44), via /public/ticket-actions/smclick-sync-transcript
+   * - pedido do usuario em 2026-09-04, alternativa ao polling automatico do
+   * `new-chat-message` pra quem quer o historico na hora, sem esperar o
+   * proximo evento (ou o debounce de 45s).
+   *
+   * Diferente dos outros handlers, este NAO recebe o payload de um webhook -
+   * busca o retrato atual do atendimento direto na API da SM Click (status,
+   * atendente, attending_time) pelo protocolo salvo em
+   * Ticket.external_customer_code. Se a SM Click ja mostra o atendimento como
+   * "finished" (mesmo que o webhook chat-finished ainda nao tenha chegado -
+   * ver o caso do estagio "pre-finish" documentado em 2026-09-04), grava a
+   * versao definitiva (hora real); senao, so atualiza o conteudo da
+   * conversa (0h), igual ao handleNewChatMessage. NUNCA mexe na coluna do
+   * Kanban - fechar o ticket continua sendo so responsabilidade do
+   * chat-finished.
+   */
+  async syncTranscriptOnDemand(ticketId: string): Promise<SmclickEventResult> {
+    const ticket = await this.tickets.findById(ticketId);
+    if (!ticket) {
+      return { status: "skipped", reason: "ticket_nao_encontrado" };
+    }
+    if (ticket.external_system !== "smclick" || !ticket.external_customer_code) {
+      return { status: "skipped", reason: "ticket_nao_e_do_smclick" };
+    }
+
+    const protocol = Number(ticket.external_customer_code);
+    if (!Number.isFinite(protocol)) {
+      return { status: "skipped", reason: "protocolo_invalido" };
+    }
+
+    const chatDetails = await this.smclickApi.getChatByProtocol(protocol);
+    if (!chatDetails) {
+      return { status: "skipped", reason: "atendimento_nao_encontrado_na_smclick" };
+    }
+
+    const messages = await this.smclickApi.getChatMessages(protocol);
+    const finished = chatDetails.status === "finished";
+    const transcript = buildTranscript(messages, ticket.client_name || chatDetails.contact?.name || "Cliente", finished);
+    if (!transcript.firstMessageAt || !transcript.lastMessageAt) {
+      return { status: "skipped", reason: "sem_mensagens" };
+    }
+
+    const attendant = resolvePrincipalAttendant(chatDetails);
+    const wrote = await this.upsertTranscriptEntry(ticket, transcript, {
+      technicianEmail: attendant?.email || this.serviceEmail,
+      technicianName: attendant?.name || "SM Click (automático)",
+      normalHours: finished ? this.sanitizeAttendingHours(chatDetails.attending_time, ticket.id) : 0,
+      hourType: finished ? "normal" : "interna",
+    });
+
+    if (!wrote) {
+      // So acontece se `finished` era false aqui mas a versao definitiva
+      // (hour_type "normal") ja existia - retrato desatualizado da SM Click,
+      // nao um erro. Nao regride pra "ao vivo".
+      return { status: "skipped", reason: "versao_definitiva_ja_existe" };
+    }
+
+    // Sempre "synced", nunca "closed": mesmo quando `finished` e a hora ja e
+    // definitiva, esta acao nao move o Ticket de coluna (ver doc acima) - usar
+    // "closed" aqui confundiria o botao com uma acao que fecha o ticket.
+    return { status: "synced", ticketId: ticket.id };
   }
 
   /**
@@ -385,44 +451,113 @@ export class SmclickIntegrationService {
   /**
    * Cria ou atualiza o Registro (TimeEntry) automatico de transcript do
    * Ticket - reconhecido pelo prefixo fixo do HTML (TRANSCRIPT_HEADER_PREFIX),
-   * pra nunca duplicar entre as varias sincronizacoes ao vivo
-   * (handleNewChatMessage) e a versao definitiva (attachConversationTranscript).
+   * pra nunca duplicar entre as tres formas de chegar aqui (webhook ao vivo,
+   * chat-finished definitivo, botao sob demanda). Serializado por ticket.id
+   * (ver withTranscriptLock) e protegido contra regressao: uma vez gravada
+   * a versao DEFINITIVA (hour_type "normal", hora real), nenhuma
+   * sincronizacao "ao vivo" (hour_type "interna", 0h) pode mais sobrescreve-la
+   * - sem essas duas protecoes juntas, duas chamadas concorrentes podiam
+   * duplicar o Registro, ou uma sincronizacao ao vivo atrasada podia zerar
+   * as horas reais do analista que acabaram de ser gravadas (achado real de
+   * code-review em 2026-09-04).
    */
   private async upsertTranscriptEntry(
     ticket: TicketRecord,
     transcript: TranscriptResult,
     opts: { technicianEmail: string; technicianName: string; normalHours: number; hourType: "normal" | "interna" }
-  ): Promise<void> {
-    if (!transcript.firstMessageAt || !transcript.lastMessageAt) return;
+  ): Promise<boolean> {
+    if (!transcript.firstMessageAt || !transcript.lastMessageAt) return false;
 
-    const existing = (await this.timeEntries.findByTicket(ticket.id)).find((entry) =>
-      entry.description?.startsWith(TRANSCRIPT_HEADER_PREFIX)
+    return this.withTranscriptLock(ticket.id, async () => {
+      const existing = (await this.timeEntries.findByTicket(ticket.id)).find((entry) =>
+        entry.description?.startsWith(TRANSCRIPT_HEADER_PREFIX)
+      );
+
+      if (existing?.hour_type === "normal" && opts.hourType === "interna") {
+        // Ja existe a versao definitiva (hora real) - uma sincronizacao "ao
+        // vivo" chegando atrasada (ou com um retrato defasado da SM Click)
+        // NAO pode regredi-la pra 0h/"interna". Retorna false pro chamador
+        // saber que nada foi gravado (nao reportar "synced" as cegas).
+        return false;
+      }
+
+      const data = {
+        ticket_id: ticket.id,
+        ticket_title: ticket.title,
+        date: formatDateSaoPaulo(transcript.firstMessageAt!),
+        start_time: formatTimeSaoPaulo(transcript.firstMessageAt!),
+        end_time: formatTimeSaoPaulo(transcript.lastMessageAt!),
+        description: transcript.html,
+        hour_type: opts.hourType,
+        normal_hours: opts.normalHours,
+        extra_hours: 0,
+        notify_client: false,
+        technician_email: opts.technicianEmail,
+        technician_name: opts.technicianName,
+      };
+
+      if (existing) {
+        await this.timeEntries.update(existing.id, data);
+      } else {
+        await this.timeEntries.create(data);
+      }
+
+      // Sem isto, total_normal_hours do ticket nao reflete o Registro
+      // recem-criado/atualizado (ver TicketActionsService.recomputeHours).
+      await this.ticketActions.recomputeHours(ticket.id);
+      return true;
+    });
+  }
+
+  /**
+   * Executa `fn` em fila, uma de cada vez, por `key` (aqui, sempre
+   * ticket.id) - as chamadas concorrentes esperam a anterior terminar em vez
+   * de rodar em paralelo. Erros de uma execucao nao travam a fila (a proxima
+   * roda normalmente); erros SAO propagados pra quem chamou (o `await`
+   * retorna a promise de `fn`, nao a da fila).
+   */
+  private withTranscriptLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.transcriptLocks.get(key) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const marker: Promise<void> = run.then(
+      () => undefined,
+      () => undefined
     );
+    this.transcriptLocks.set(key, marker);
+    // Autolimpeza: se ninguem mais entrou na fila deste `key` enquanto `run`
+    // executava, remove a entrada do Map - sem isto ele cresceria sem limite
+    // (um ticket.id por transcript sincronizado, pra sempre), mesmo problema
+    // que lastLiveSyncAt tem (ver recordLiveSync). Se alguem ja enfileirou
+    // outra chamada nesse meio tempo, o valor no Map nao e mais `marker` e a
+    // entrada fica (ainda em uso).
+    void marker.finally(() => {
+      if (this.transcriptLocks.get(key) === marker) {
+        this.transcriptLocks.delete(key);
+      }
+    });
+    return run;
+  }
 
-    const data = {
-      ticket_id: ticket.id,
-      ticket_title: ticket.title,
-      date: formatDateSaoPaulo(transcript.firstMessageAt),
-      start_time: formatTimeSaoPaulo(transcript.firstMessageAt),
-      end_time: formatTimeSaoPaulo(transcript.lastMessageAt),
-      description: transcript.html,
-      hour_type: opts.hourType,
-      normal_hours: opts.normalHours,
-      extra_hours: 0,
-      notify_client: false,
-      technician_email: opts.technicianEmail,
-      technician_name: opts.technicianName,
-    };
+  /** TTL de limpeza pro Map de debounce ao vivo - ver recordLiveSync. */
+  private static readonly LIVE_SYNC_ENTRY_TTL_MS = 2 * 60 * 60 * 1000; // 2h
 
-    if (existing) {
-      await this.timeEntries.update(existing.id, data);
-    } else {
-      await this.timeEntries.create(data);
+  /**
+   * Marca a sincronizacao ao vivo mais recente pro chat e poda entradas
+   * velhas do Map - sem isto ele cresceria sem limite (uma entrada por
+   * conversa da SM Click, pra sempre, ja que este servico roda como
+   * processo unico de longa duracao). 2h sem mensagem nova e sinal seguro de
+   * que o chat nao vai mais ser sincronizado aqui (finalizado, abandonado em
+   * triagem, etc) - cobre os casos que a limpeza pontual em handleChatFinished
+   * (so no caminho de sucesso) nao cobre.
+   */
+  private recordLiveSync(chatId: string): void {
+    const now = Date.now();
+    this.lastLiveSyncAt.set(chatId, now);
+    for (const [key, timestamp] of this.lastLiveSyncAt) {
+      if (now - timestamp > SmclickIntegrationService.LIVE_SYNC_ENTRY_TTL_MS) {
+        this.lastLiveSyncAt.delete(key);
+      }
     }
-
-    // Sem isto, total_normal_hours do ticket nao reflete o Registro
-    // recem-criado/atualizado (ver TicketActionsService.recomputeHours).
-    await this.ticketActions.recomputeHours(ticket.id);
   }
 
   /**
