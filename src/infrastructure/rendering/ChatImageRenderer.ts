@@ -136,8 +136,46 @@ interface FetchedMedia {
   height: number;
 }
 
+/** Faixas de IP privadas/internas (SSRF) - o host da URL, mesmo apos resolver DNS, nunca pode cair aqui. */
+const PRIVATE_HOSTNAME_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^169\.254\./, // link-local - inclui o endpoint de metadata de nuvem (AWS/GCP/Azure)
+  /^0\.0\.0\.0$/,
+  /^\[?::1\]?$/,
+  /^\[?fc00:/i,
+  /^\[?fe80:/i,
+];
+
+/**
+ * A URL da foto vem do CONTEUDO de uma mensagem (`content.url`), nao de algo
+ * que este servico gerou - defesa basica contra SSRF antes de deixar o
+ * servidor buscar qualquer coisa que uma mensagem aponte: so http(s), e
+ * nunca um host que pareca endereco privado/interno (inclusive o endpoint de
+ * metadata de nuvem, 169.254.169.254). Nao resolve DNS pra checar rebinding -
+ * cobre o caso comum, nao e prova contra atacante sofisticado.
+ */
+function isAllowedMediaUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  return !PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(parsed.hostname));
+}
+
 /** Baixa a foto da SM Click e recomprime pra um tamanho previsivel (JPEG) - nunca confia no formato/tamanho originais. */
 async function fetchAndResizeImage(url: string): Promise<FetchedMedia | null> {
+  if (!isAllowedMediaUrl(url)) {
+    console.error(`[chat-image-renderer] URL de midia recusada (fora do allowlist http(s)/host publico): ${url}`);
+    return null;
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), MEDIA_FETCH_TIMEOUT_MS);

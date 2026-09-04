@@ -78,7 +78,8 @@ export const ticketActionsService = new TicketActionsService(
   notificationService,
   emailService,
   ticketAutomationEngine,
-  timeEntryRepository
+  timeEntryRepository,
+  kanbanConfigRepository
 );
 
 export const ticketCreationHooks = new TicketCreationHooks(clientRepository, notificationService, userRepository);

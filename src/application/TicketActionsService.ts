@@ -1,3 +1,4 @@
+import { KanbanConfigRepository } from "../infrastructure/base44/KanbanConfigRepository";
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
 import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepository";
@@ -10,6 +11,10 @@ export interface TicketActor {
   email: string;
   name: string;
 }
+
+export type DesignateImplantacaoResult =
+  | { status: "linked"; ticketId: string; parentTicketId: string; parentTicketTitle: string }
+  | { status: "skipped"; reason: string };
 
 export interface UpdateTicketStatusCommand {
   ticketId: string;
@@ -52,7 +57,8 @@ export class TicketActionsService {
     private readonly notifications: NotificationService,
     private readonly mailer: EmailService,
     private readonly automation: TicketAutomationEngine,
-    private readonly timeEntries: TimeEntryRepository
+    private readonly timeEntries: TimeEntryRepository,
+    private readonly kanbanConfigs: KanbanConfigRepository
   ) {}
 
   /**
@@ -188,5 +194,73 @@ export class TicketActionsService {
     }
 
     return { skipped: false, oldStatus, newStatus, executedRules };
+  }
+
+  /**
+   * Designa um ticket de Suporte como Implantação e vincula ao projeto de
+   * Implantação ABERTO mais recente do mesmo cliente (via parent_ticket_id -
+   * o mesmo campo que RelatedTicketsPanel.jsx, no Base44, ja usa de verdade
+   * pra "Ticket Pai/Filhos") - pedido do usuario em 2026-09-04. Chamado
+   * direto do navegador (botao na tela do Ticket), migrado pra ca em vez de
+   * chamadas diretas `base44.entities.*` no frontend, mesmo motivo das
+   * outras rotas /public/ticket-actions/*: nao gerar custo de credito de
+   * integracao no Base44.
+   *
+   * A coluna inicial e a de menor `order` (nao-final) do KanbanConfig de
+   * Implantação da vertical do ticket - o quadro de Implantação (Tickets.jsx,
+   * Base44) escolhe as colunas SO por main_type+vertical, sem depender do
+   * ticket_type bater com nada (confirmado direto no codigo em 2026-09-04),
+   * entao nao ha risco do ticket ficar orfao so por causa do ticket_type -
+   * mesma logica ja usada em SmclickIntegrationService pro lado de Suporte.
+   */
+  async designateAsImplantacao(ticketId: string, actor: TicketActor): Promise<DesignateImplantacaoResult> {
+    const ticket = await this.tickets.findById(ticketId);
+    if (!ticket) {
+      return { status: "skipped", reason: "ticket_nao_encontrado" };
+    }
+    if (ticket.main_type === "implantacao") {
+      return { status: "skipped", reason: "ja_e_implantacao" };
+    }
+    if (!ticket.client_id) {
+      return { status: "skipped", reason: "ticket_sem_cliente" };
+    }
+
+    const implantacaoTickets = await this.tickets.findMany({ client_id: ticket.client_id, main_type: "implantacao" });
+    const parent = implantacaoTickets
+      .filter((t) => !t.closed_at)
+      .sort((a, b) => new Date(b.created_date).getTime() - new Date(a.created_date).getTime())[0];
+    if (!parent) {
+      return { status: "skipped", reason: "cliente_sem_implantacao_aberta" };
+    }
+
+    const configs = await this.kanbanConfigs.findMany({ main_type: "implantacao", vertical: ticket.vertical });
+    const config = configs.find((c) => c.active !== false) ?? configs[0];
+    const initialColumn = (config?.columns ?? [])
+      .filter((c) => !c.is_final)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
+    if (!initialColumn) {
+      return { status: "skipped", reason: "pipeline_implantacao_nao_configurado" };
+    }
+
+    await this.tickets.update(ticket.id, {
+      main_type: "implantacao",
+      ticket_type: parent.ticket_type || ticket.ticket_type,
+      status_column_id: initialColumn.title,
+      status_column_title: initialColumn.title,
+      parent_ticket_id: parent.id,
+      parent_ticket_number: parent.ticket_number,
+      parent_ticket_title: parent.title,
+    });
+
+    await this.ticketEvents.create({
+      ticket_id: ticket.id,
+      type: "field_change",
+      description: `Ticket designado como Implantação e vinculado ao ticket "${parent.title}".`,
+      user_email: actor.email,
+      user_name: actor.name,
+      visible_to_client: false,
+    });
+
+    return { status: "linked", ticketId: ticket.id, parentTicketId: parent.id, parentTicketTitle: parent.title };
   }
 }
