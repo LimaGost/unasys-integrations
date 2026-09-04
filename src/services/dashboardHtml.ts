@@ -285,6 +285,25 @@ export const DASHBOARD_HTML = `<!doctype html>
         <button class="action small" type="button" data-note-integration="smclick">Salvar</button>
       </div>
       <div class="action-result" id="smclickTokenResult"></div>
+
+      <div class="settings-block-head" style="margin-top:16px;">
+        <h3 style="font-size:14px;">API de saída (buscar histórico de mensagens)</h3>
+        <span class="pill" id="smclickApiStatusPill">verificando</span>
+      </div>
+      <p class="settings-desc">
+        Usada só para buscar o histórico de mensagens de um atendimento quando ele é fechado
+        (anexado automaticamente como Registro no ticket). Gerada no painel da SM Click.
+      </p>
+      <div class="settings-row">
+        <label class="field"><span>API Key</span>
+          <input type="password" id="smclickApiKeyInput" placeholder="ex: 652ac0f8-bf8c-4f88-bb31-2123a18c4027" autocomplete="off">
+        </label>
+        <label class="field"><span>URL base</span>
+          <input type="text" id="smclickBaseUrlInput" placeholder="ex: https://api.smclick.com.br" autocomplete="off">
+        </label>
+        <button class="action" id="btnSaveSmclickApi" type="button">Salvar</button>
+      </div>
+      <div class="action-result" id="smclickApiResult"></div>
     </div>
 
     <div class="settings-block">
@@ -802,6 +821,11 @@ export const DASHBOARD_HTML = `<!doctype html>
       document.getElementById("tokenSmclick").value = data.webhookTokens.smclick.token || "(nao configurado)";
       document.getElementById("noteSmclick").value = data.webhookTokens.smclick.note || "";
 
+      document.getElementById("smclickBaseUrlInput").value = data.smclickApi.baseUrl || "";
+      document.getElementById("smclickApiKeyInput").placeholder = data.smclickApi.apiKeyMasked
+        ? "atual: " + data.smclickApi.apiKeyMasked
+        : "ex: 652ac0f8-bf8c-4f88-bb31-2123a18c4027";
+
       renderIntegrations(data.customIntegrations);
 
       setStatusPill("salesDataStatusPill", Boolean(data.webhookTokens.salesData.token), "token configurado", "sem token");
@@ -813,8 +837,23 @@ export const DASHBOARD_HTML = `<!doctype html>
       setStatusPill("ticketActionsStatusPill", Boolean(data.webhookTokens.ticketActions.token), "token configurado", "sem token");
       setStatusPill("externalTicketsStatusPill", Boolean(data.webhookTokens.externalTickets.token), "token configurado", "sem token");
       setStatusPill("smclickStatusPill", Boolean(data.webhookTokens.smclick.token), "token configurado", "sem token");
+      setStatusPill("smclickApiStatusPill", data.smclickApi.configured, "pronto", "credenciais pendentes");
     }).catch(function () {});
   }
+
+  document.getElementById("btnSaveSmclickApi").addEventListener("click", function () {
+    var resultEl = document.getElementById("smclickApiResult");
+    var apiKey = document.getElementById("smclickApiKeyInput").value.trim();
+    var baseUrl = document.getElementById("smclickBaseUrlInput").value.trim();
+    apiCall("/dashboard/api/settings/smclick-api", "POST", { apiKey: apiKey, baseUrl: baseUrl, confirmPassword: getConfirmPassword() })
+      .then(function (res) {
+        showResult(resultEl, res.ok, res.data.message || res.data.error || "Falhou.");
+        if (res.ok) {
+          document.getElementById("smclickApiKeyInput").value = "";
+          loadSettings();
+        }
+      });
+  });
 
   document.getElementById("btnSaveGmail").addEventListener("click", function () {
     var resultEl = document.getElementById("gmailSettingsResult");

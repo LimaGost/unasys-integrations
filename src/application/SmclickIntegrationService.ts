@@ -2,7 +2,10 @@ import { ClientRepository } from "../infrastructure/base44/ClientRepository";
 import { KanbanConfigRepository } from "../infrastructure/base44/KanbanConfigRepository";
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
+import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepository";
+import type { SmclickApiClient } from "../infrastructure/smclick/SmclickApiClient";
 import type { ClientRecord, KanbanColumn, TicketRecord } from "../types/entities";
+import { buildTranscript, formatDateSaoPaulo, formatTimeSaoPaulo } from "./smclickTranscript";
 import type { TicketActionsService } from "./TicketActionsService";
 import type { TicketCreationHooks } from "./TicketCreationHooks";
 
@@ -44,10 +47,13 @@ const DEPARTMENT_TICKET_TYPE: Record<string, { vertical: string; ticketType: str
 };
 
 /**
- * Porta as duas primeiras integracoes com a SM Click (atendimento via
- * WhatsApp): o Ticket nasce sozinho quando um atendente de fato assume a
- * conversa (evento `chat-started`) e fecha sozinho quando o atendimento
- * termina la (evento `chat-finished`). Chamado por routes/smclickWebhook.ts.
+ * Porta as integracoes com a SM Click (atendimento via WhatsApp): o Ticket
+ * nasce sozinho quando um atendente de fato assume a conversa (evento
+ * `chat-started`) e, quando o atendimento termina la (evento
+ * `chat-finished`), o ticket e fechado E o historico completo da conversa e
+ * anexado como um Registro (TimeEntry) no campo "Relato da Atividade" -
+ * pedido do usuario em 2026-09-04 pra nao precisar abrir o WhatsApp pra ver
+ * o que foi falado com o cliente. Chamado por routes/smclickWebhook.ts.
  *
  * O gatilho de criacao e `chat-started` (estagio "ATIVO" na SM Click), NAO
  * `new-chat` (estagio "LEADS"/triagem) nem a espera na fila (estagio
@@ -56,9 +62,9 @@ const DEPARTMENT_TICKET_TYPE: Record<string, { vertical: string; ticketType: str
  * mensagem recebida (inclusive de leads que nunca viram atendimento de
  * verdade) geraria um ticket.
  *
- * NAO faz nenhuma chamada de volta pra API da SM Click (enviar mensagem,
- * etc.) - so recebe os dois eventos. Isso e trabalho futuro (ver conversa
- * sobre "fechar o ciclo" avisando o cliente pelo WhatsApp).
+ * Unica chamada de SAIDA pra API da SM Click ate agora: buscar mensagens
+ * (`SmclickApiClient.getChatMessages`), pra montar o transcript. Enviar
+ * mensagem de volta pro cliente (fechar o ciclo) ainda e trabalho futuro.
  */
 export class SmclickIntegrationService {
   /**
@@ -71,11 +77,16 @@ export class SmclickIntegrationService {
    */
   private readonly chatsBeingCreated = new Set<string>();
 
+  /** Mesma logica da trava acima, mas pro `chat-finished` - evita fechar/anexar transcript em dobro numa reentrega. */
+  private readonly chatsBeingFinished = new Set<string>();
+
   constructor(
     private readonly tickets: TicketRepository,
     private readonly ticketEvents: TicketEventRepository,
     private readonly clients: ClientRepository,
     private readonly kanbanConfigs: KanbanConfigRepository,
+    private readonly timeEntries: TimeEntryRepository,
+    private readonly smclickApi: SmclickApiClient,
     private readonly ticketActions: TicketActionsService,
     private readonly ticketCreationHooks: TicketCreationHooks,
     private readonly serviceEmail: string
@@ -156,44 +167,110 @@ export class SmclickIntegrationService {
       return { status: "skipped", reason: "payload_incompleto" };
     }
 
-    const ticket = await this.tickets.findOne({ external_reference: chat.id });
-    if (!ticket) {
-      return { status: "skipped", reason: "ticket_nao_encontrado" };
+    if (this.chatsBeingFinished.has(chat.id)) {
+      return { status: "skipped", reason: "fechamento_em_andamento" };
     }
-    if (ticket.closed_at) {
-      return { status: "skipped", reason: "ticket_ja_fechado" };
-    }
+    this.chatsBeingFinished.add(chat.id);
 
-    const finalColumn = await this.findFinalColumn(ticket);
-    if (!finalColumn) {
-      // Nao adivinha um titulo de coluna: sem uma coluna is_final configurada
-      // pra essa combinacao de vertical/tipo, o ticket fica aberto mesmo (mais
-      // seguro do que fechar numa coluna que nao existe pra esse quadro).
-      return { status: "skipped", reason: "coluna_final_nao_configurada" };
-    }
+    try {
+      const ticket = await this.tickets.findOne({ external_reference: chat.id });
+      if (!ticket) {
+        return { status: "skipped", reason: "ticket_nao_encontrado" };
+      }
+      if (ticket.closed_at) {
+        return { status: "skipped", reason: "ticket_ja_fechado" };
+      }
 
-    const result = await this.ticketActions.updateStatus(
-      {
-        ticketId: ticket.id,
-        newStatus: finalColumn.title,
-        columnData: {
-          id: finalColumn.title,
-          is_final: true,
-          pauses_sla: finalColumn.pauses_sla,
-          sla_hours: finalColumn.sla_hours,
+      const finalColumn = await this.findFinalColumn(ticket);
+      if (!finalColumn) {
+        // Nao adivinha um titulo de coluna: sem uma coluna is_final configurada
+        // pra essa combinacao de vertical/tipo, o ticket fica aberto mesmo (mais
+        // seguro do que fechar numa coluna que nao existe pra esse quadro).
+        return { status: "skipped", reason: "coluna_final_nao_configurada" };
+      }
+
+      const result = await this.ticketActions.updateStatus(
+        {
+          ticketId: ticket.id,
+          newStatus: finalColumn.title,
+          columnData: {
+            id: finalColumn.title,
+            is_final: true,
+            pauses_sla: finalColumn.pauses_sla,
+            sla_hours: finalColumn.sla_hours,
+          },
         },
-      },
-      { email: this.serviceEmail, name: "SM Click (automatico)" }
-    );
+        { email: this.serviceEmail, name: "SM Click (automatico)" }
+      );
 
-    // updateStatus pula silenciosamente (sem tocar closed_at) quando o titulo
-    // atual ja bate com o da coluna final - nao reportar "closed" nesse caso,
-    // senao a SM Click acha que fechou e o ticket continua aberto de verdade.
-    if (result.skipped) {
-      return { status: "skipped", reason: `update_status_pulou:${result.reason}` };
+      // updateStatus pula silenciosamente (sem tocar closed_at) quando o titulo
+      // atual ja bate com o da coluna final - nao reportar "closed" nesse caso,
+      // senao a SM Click acha que fechou e o ticket continua aberto de verdade.
+      if (result.skipped) {
+        return { status: "skipped", reason: `update_status_pulou:${result.reason}` };
+      }
+
+      // Best-effort: o fechamento do ticket ja aconteceu (acima) e e o que
+      // importa pra SM Click - se o transcript falhar (API fora do ar, etc),
+      // so loga e reporta "closed" do mesmo jeito, sem fazer a SM Click
+      // reenviar o webhook achando que o fechamento falhou.
+      try {
+        await this.attachConversationTranscript(ticket, chat);
+      } catch (error) {
+        console.error(`[smclick] falha ao anexar transcript da conversa (ticket ${ticket.id}):`, error);
+      }
+
+      return { status: "closed", ticketId: ticket.id };
+    } finally {
+      this.chatsBeingFinished.delete(chat.id);
     }
+  }
 
-    return { status: "closed", ticketId: ticket.id };
+  /**
+   * Busca o historico de mensagens do atendimento na API da SM Click e cria
+   * um Registro (TimeEntry) no Ticket com a conversa no campo "Relato da
+   * Atividade" - pedido do usuario em 2026-09-04 pra dar visibilidade
+   * completa do que foi falado com o cliente, sem precisar abrir o WhatsApp.
+   */
+  private async attachConversationTranscript(ticket: TicketRecord, chat: SmclickChat): Promise<void> {
+    if (!chat.protocol) return;
+
+    const messages = await this.smclickApi.getChatMessages(chat.protocol);
+    const transcript = buildTranscript(messages, ticket.client_name || chat.contact?.name || "Cliente");
+    if (!transcript.firstMessageAt || !transcript.lastMessageAt) return;
+
+    // normal_hours/extra_hours ficam em 0 de proposito: o tempo entre a
+    // primeira e a ultima mensagem e tempo de PARede (o cliente pode ter
+    // demorado horas/dias pra responder), nao horas trabalhadas pelo
+    // analista - contar isso como normal_hours inflaria total_normal_hours
+    // do ticket com um numero sem sentido. start_time/end_time (abaixo)
+    // ainda mostram o horario real da conversa, so nao entram na soma.
+    await this.timeEntries.create({
+      ticket_id: ticket.id,
+      ticket_title: ticket.title,
+      date: formatDateSaoPaulo(transcript.firstMessageAt),
+      start_time: formatTimeSaoPaulo(transcript.firstMessageAt),
+      end_time: formatTimeSaoPaulo(transcript.lastMessageAt),
+      description: transcript.html,
+      hour_type: "interna",
+      normal_hours: 0,
+      extra_hours: 0,
+      notify_client: false,
+      technician_email: this.serviceEmail,
+      technician_name: "SM Click (automático)",
+    });
+
+    await this.ticketEvents.create({
+      ticket_id: ticket.id,
+      type: "field_change",
+      description: "Histórico da conversa do WhatsApp (SM Click) anexado automaticamente ao ticket.",
+      user_email: this.serviceEmail,
+      visible_to_client: false,
+    });
+
+    // Sem isto, total_normal_hours do ticket nao reflete o Registro recem-criado
+    // (create de TimeEntry nao recalcula sozinho - ver TicketActionsService.recomputeHours).
+    await this.ticketActions.recomputeHours(ticket.id);
   }
 
   private async findOrCreateClientByPhone(telefone: string, name: string, vertical: string): Promise<ClientRecord> {

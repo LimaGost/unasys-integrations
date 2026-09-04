@@ -26,6 +26,7 @@ import { TimeEntryRepository } from "./infrastructure/base44/TimeEntryRepository
 import { UserRepository } from "./infrastructure/base44/UserRepository";
 import { InboxReader } from "./infrastructure/email/InboxReader";
 import { Mailer } from "./infrastructure/email/Mailer";
+import { SmclickApiClient } from "./infrastructure/smclick/SmclickApiClient";
 
 export const ticketRepository = new TicketRepository();
 const ticketEmailRepository = new TicketEmailRepository();
@@ -87,6 +88,8 @@ export const smclickIntegrationService = new SmclickIntegrationService(
   ticketEventRepository,
   clientRepository,
   kanbanConfigRepository,
+  timeEntryRepository,
+  new SmclickApiClient(),
   ticketActionsService,
   ticketCreationHooks,
   env.base44.serviceEmail

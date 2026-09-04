@@ -7,6 +7,7 @@ import {
   regenerateWebhookToken,
   removeCustomIntegration,
   setGmailCredentials,
+  setSmclickApiCredentials,
   setWebhookTokenNote,
   type WebhookIntegration,
 } from "../services/configStore";
@@ -57,6 +58,11 @@ router.get("/", (_req: Request, res: Response) => {
       externalTickets: { token: config.webhookTokens.externalTickets.token ?? null, note: config.webhookTokens.externalTickets.note ?? "" },
       smclick: { token: config.webhookTokens.smclick.token ?? null, note: config.webhookTokens.smclick.note ?? "" },
     },
+    smclickApi: {
+      apiKeyMasked: maskSecret(config.smclickApi.apiKey),
+      baseUrl: config.smclickApi.baseUrl ?? null,
+      configured: Boolean(config.smclickApi.apiKey && config.smclickApi.baseUrl),
+    },
     customIntegrations: config.customIntegrations.map((integration) => ({
       slug: integration.slug,
       name: integration.name,
@@ -94,6 +100,23 @@ router.post(
 
     await setGmailCredentials(user, appPassword, { smtpHost, smtpPort, imapHost, imapPort });
     res.json({ message: `Credenciais de email atualizadas para ${user}.` });
+  })
+);
+
+router.post(
+  "/smclick-api",
+  requireDashboardPasswordConfirmation,
+  asyncHandler(async (req: Request, res: Response) => {
+    const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+    const baseUrl = typeof req.body?.baseUrl === "string" ? req.body.baseUrl.trim().replace(/\/$/, "") : "";
+
+    if (!apiKey || !/^https?:\/\//.test(baseUrl)) {
+      res.status(400).json({ error: "BadRequest", message: "Informe a API Key e uma URL base valida (ex: https://api.smclick.com.br)." });
+      return;
+    }
+
+    await setSmclickApiCredentials(apiKey, baseUrl);
+    res.json({ message: "Credenciais da API da SM Click atualizadas." });
   })
 );
 

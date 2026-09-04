@@ -27,6 +27,17 @@ export interface EmailAccountConfig {
   imapPort?: number;
 }
 
+/**
+ * Credencial de SAIDA para a API REST da SM Click (diferente de
+ * webhookTokens.smclick, que e o token de ENTRADA que a SM Click usa pra
+ * chamar este servico). Usado por SmclickApiClient pra buscar o historico de
+ * mensagens de um atendimento (ver SmclickIntegrationService.handleChatFinished).
+ */
+export interface SmclickApiConfig {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 export interface StoredConfig {
   /**
    * Historicamente so suportava Gmail (daí o nome) - hoje aceita qualquer
@@ -34,6 +45,7 @@ export interface StoredConfig {
    * smtpHost/imapHost. Sem esses campos, cai nos servidores do Gmail.
    */
   gmail: EmailAccountConfig;
+  smclickApi: SmclickApiConfig;
   webhookTokens: {
     salesData: WebhookTokenEntry;
     gmail: WebhookTokenEntry;
@@ -109,6 +121,7 @@ function isLegacyFormat(parsed: unknown): parsed is LegacyStoredConfig {
 function migrateLegacyConfig(legacy: LegacyStoredConfig): StoredConfig {
   return {
     gmail: legacy.gmail,
+    smclickApi: {},
     webhookTokens: {
       salesData: { token: legacy.webhookTokens.salesData },
       gmail: { token: legacy.webhookTokens.gmail },
@@ -155,6 +168,10 @@ function backfillNewWebhookTokens(config: StoredConfig): boolean {
     config.webhookTokens.smclick = {};
     changed = true;
   }
+  if (!config.smclickApi) {
+    config.smclickApi = {};
+    changed = true;
+  }
   return changed;
 }
 
@@ -180,6 +197,7 @@ function seedFromEnv(): StoredConfig {
       user: env.gmail.user,
       appPassword: env.gmail.appPassword,
     },
+    smclickApi: {},
     webhookTokens: {
       salesData: { token: env.webhookTokens.salesData },
       gmail: { token: env.webhookTokens.gmail },
@@ -259,6 +277,13 @@ export async function setGmailCredentials(
     config.gmail.smtpPort = server?.smtpPort || undefined;
     config.gmail.imapHost = server?.imapHost || undefined;
     config.gmail.imapPort = server?.imapPort || undefined;
+  });
+}
+
+export async function setSmclickApiCredentials(apiKey: string, baseUrl: string): Promise<void> {
+  await updateConfig((config) => {
+    config.smclickApi.apiKey = apiKey;
+    config.smclickApi.baseUrl = baseUrl;
   });
 }
 

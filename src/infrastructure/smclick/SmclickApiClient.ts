@@ -1,0 +1,53 @@
+import { getConfig } from "../../services/configStore";
+
+export interface SmclickMessage {
+  id: string;
+  type: string;
+  from_me: boolean;
+  sent_at: string;
+  sent_by?: { name?: string } | null;
+  content?: Record<string, unknown>;
+}
+
+interface SmclickMessagePage {
+  results: SmclickMessage[];
+  next: string | null;
+}
+
+/** Protecao contra loop infinito se a API devolver `next` de forma inesperada (ciclo, etc). */
+const MAX_PAGES = 20;
+
+/**
+ * Cliente HTTP para a API REST da SM Click (chamadas de SAIDA - diferente do
+ * webhook de ENTRADA em routes/smclickWebhook.ts). So implementa o que e
+ * usado ate agora: buscar o historico de mensagens de um atendimento, pra
+ * montar o transcript da conversa (ver SmclickIntegrationService).
+ */
+export class SmclickApiClient {
+  async getChatMessages(protocol: number): Promise<SmclickMessage[]> {
+    const { apiKey, baseUrl } = getConfig().smclickApi;
+    if (!apiKey || !baseUrl) {
+      throw new Error("Credenciais da API da SM Click ainda nao foram configuradas (ver painel /dashboard).");
+    }
+
+    const messages: SmclickMessage[] = [];
+    let url: string | null = `${baseUrl}/attendances/chats/message?protocol=${protocol}`;
+    let pages = 0;
+
+    while (url && pages < MAX_PAGES) {
+      const response = await fetch(url, { headers: { "X-API-KEY": apiKey } });
+      if (!response.ok) {
+        throw new Error(`SM Click respondeu ${response.status} ao buscar mensagens do protocolo ${protocol}.`);
+      }
+
+      const page = (await response.json()) as SmclickMessagePage;
+      messages.push(...page.results);
+      // Nos testes reais o `next` sempre veio como URL absoluta, mas nao
+      // custa nada resolver contra baseUrl caso um dia venha so o caminho.
+      url = page.next ? new URL(page.next, baseUrl).toString() : null;
+      pages += 1;
+    }
+
+    return messages;
+  }
+}
