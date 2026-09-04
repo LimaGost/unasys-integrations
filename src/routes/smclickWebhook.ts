@@ -42,9 +42,11 @@ function maskPhone(phone: string | undefined): string {
  */
 function logEvent(body: { event?: string; infos?: { chat?: SmclickChat } }, result: unknown): void {
   const chat = body.infos?.chat;
+  const attendant = chat?.attendant?.map((a) => `${a.name ?? "?"}<${a.email ?? "?"}>${a.principal ? "*" : ""}`).join(",") ?? "?";
   console.log(
     `[smclick] evento=${body.event ?? "?"} chat_id=${chat?.id ?? "?"} protocolo=${chat?.protocol ?? "?"} ` +
       `departamento=${chat?.department?.id ?? "?"}(${chat?.department?.name ?? "?"}) telefone=${maskPhone(chat?.contact?.telephone)} ` +
+      `atendente=[${attendant}] attending_time=${chat?.attending_time ?? "?"} ` +
       `resultado=${JSON.stringify(result)}`
   );
 }

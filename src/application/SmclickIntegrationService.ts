@@ -9,11 +9,27 @@ import { buildTranscript, formatDateSaoPaulo, formatTimeSaoPaulo } from "./smcli
 import type { TicketActionsService } from "./TicketActionsService";
 import type { TicketCreationHooks } from "./TicketCreationHooks";
 
+export interface SmclickAttendant {
+  id?: string;
+  name?: string;
+  email?: string;
+  principal?: boolean;
+}
+
 export interface SmclickChat {
   id?: string;
   protocol?: number;
   department?: { id?: string; name?: string };
   contact?: { name?: string; telephone?: string };
+  attendant?: SmclickAttendant[];
+  /** Segundos de atendimento ATIVO (nao conta fila de espera) - vem no payload do evento chat-finished. */
+  attending_time?: number;
+}
+
+/** O atendente marcado `principal` (responsavel), ou o primeiro da lista se nenhum estiver marcado. */
+function resolvePrincipalAttendant(chat: SmclickChat): SmclickAttendant | undefined {
+  const attendants = chat.attendant ?? [];
+  return attendants.find((a) => a.principal) ?? attendants[0];
 }
 
 export type SmclickEventResult =
@@ -126,6 +142,7 @@ export class SmclickIntegrationService {
 
       const contactName = chat.contact.name || chat.contact.telephone;
       const client = await this.findOrCreateClientByPhone(chat.contact.telephone, contactName, vertical);
+      const attendant = resolvePrincipalAttendant(chat);
 
       const ticket = await this.tickets.create({
         title: `Atendimento WhatsApp - ${contactName}`,
@@ -144,6 +161,11 @@ export class SmclickIntegrationService {
         // Coluna real do KanbanConfig (nao um valor fixo) - ver findInitialColumn.
         status_column_id: initialColumn.title,
         status_column_title: initialColumn.title,
+        // Email do atendente da SM Click bate com o email do analista no Unasys
+        // Tickets (mesmo dominio @franqueadolinx.com.br, confirmado em 2026-09-04) -
+        // sem precisar de nenhum mapeamento manual entre os dois sistemas.
+        assigned_to: attendant?.email,
+        assigned_to_name: attendant?.name,
       });
 
       await this.ticketEvents.create({
@@ -231,6 +253,15 @@ export class SmclickIntegrationService {
    * um Registro (TimeEntry) no Ticket com a conversa no campo "Relato da
    * Atividade" - pedido do usuario em 2026-09-04 pra dar visibilidade
    * completa do que foi falado com o cliente, sem precisar abrir o WhatsApp.
+   *
+   * As horas do Registro vem de `chat.attending_time` (segundos de
+   * atendimento ATIVO que a propria SM Click calcula e manda no payload do
+   * chat-finished - NAO conta tempo de fila/espera do cliente) - e o
+   * Registro fica atribuido ao email do atendente principal da SM Click, que
+   * bate com o email do analista no Unasys Tickets (mesmo dominio
+   * @franqueadolinx.com.br). Pedido explicito do usuario em 2026-09-04: essas
+   * horas TEM que contar nos relatorios do analista, por isso hour_type e
+   * "normal" (nao "interna") e normal_hours reflete o attending_time real.
    */
   private async attachConversationTranscript(ticket: TicketRecord, chat: SmclickChat): Promise<void> {
     if (!chat.protocol) return;
@@ -239,12 +270,9 @@ export class SmclickIntegrationService {
     const transcript = buildTranscript(messages, ticket.client_name || chat.contact?.name || "Cliente");
     if (!transcript.firstMessageAt || !transcript.lastMessageAt) return;
 
-    // normal_hours/extra_hours ficam em 0 de proposito: o tempo entre a
-    // primeira e a ultima mensagem e tempo de PARede (o cliente pode ter
-    // demorado horas/dias pra responder), nao horas trabalhadas pelo
-    // analista - contar isso como normal_hours inflaria total_normal_hours
-    // do ticket com um numero sem sentido. start_time/end_time (abaixo)
-    // ainda mostram o horario real da conversa, so nao entram na soma.
+    const attendant = resolvePrincipalAttendant(chat);
+    const attendingHours = this.sanitizeAttendingHours(chat.attending_time, ticket.id);
+
     await this.timeEntries.create({
       ticket_id: ticket.id,
       ticket_title: ticket.title,
@@ -252,12 +280,12 @@ export class SmclickIntegrationService {
       start_time: formatTimeSaoPaulo(transcript.firstMessageAt),
       end_time: formatTimeSaoPaulo(transcript.lastMessageAt),
       description: transcript.html,
-      hour_type: "interna",
-      normal_hours: 0,
+      hour_type: "normal",
+      normal_hours: attendingHours,
       extra_hours: 0,
       notify_client: false,
-      technician_email: this.serviceEmail,
-      technician_name: "SM Click (automático)",
+      technician_email: attendant?.email || this.serviceEmail,
+      technician_name: attendant?.name || "SM Click (automático)",
     });
 
     await this.ticketEvents.create({
@@ -271,6 +299,23 @@ export class SmclickIntegrationService {
     // Sem isto, total_normal_hours do ticket nao reflete o Registro recem-criado
     // (create de TimeEntry nao recalcula sozinho - ver TicketActionsService.recomputeHours).
     await this.ticketActions.recomputeHours(ticket.id);
+  }
+
+  /**
+   * Converte attending_time (segundos) em horas, descartando valores
+   * implausiveis (>24h de atendimento ATIVO num unico chat e sinal de
+   * unidade errada ou bug do lado da SM Click, nao de trabalho de verdade) -
+   * mesmo espirito do guard de sla_hours em TicketActionsService.updateStatus:
+   * nao grava as horas do analista as cegas, se o numero nao faz sentido.
+   */
+  private sanitizeAttendingHours(attendingTimeSeconds: number | undefined, ticketId: string): number {
+    const hours = (attendingTimeSeconds ?? 0) / 3600;
+    if (hours <= 0) return 0;
+    if (hours > 24) {
+      console.error(`[smclick] attending_time implausivel (${attendingTimeSeconds}s = ${hours}h) pro ticket ${ticketId} - gravando 0h em vez disso.`);
+      return 0;
+    }
+    return Math.round(hours * 100) / 100;
   }
 
   private async findOrCreateClientByPhone(telefone: string, name: string, vertical: string): Promise<ClientRecord> {
