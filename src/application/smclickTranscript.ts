@@ -1,20 +1,11 @@
+import type { RenderableMessage } from "../infrastructure/rendering/ChatImageRenderer";
 import type { SmclickMessage } from "../infrastructure/smclick/SmclickApiClient";
 
-export interface TranscriptResult {
-  html: string;
+export interface ResolvedTranscript {
+  items: RenderableMessage[];
   /** null se nao houver nenhuma mensagem com sent_at valido (nao da pra montar um Registro sem hora de inicio/fim). */
   firstMessageAt: Date | null;
   lastMessageAt: Date | null;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/\n/g, "<br>");
 }
 
 function formatTime(date: Date): string {
@@ -30,19 +21,6 @@ export function formatTimeSaoPaulo(date: Date): string {
   return formatTime(date);
 }
 
-/**
- * Cores no estilo WhatsApp modo escuro (o editor do ticket usa tema escuro -
- * fundo claro com texto escuro herdado ficava ilegivel, reportado pelo
- * usuario em 2026-09-04): recebida (cliente) = cinza escuro, enviada
- * (atendente/bot) = verde escuro, texto claro nos dois - a cor do texto e
- * setada explicitamente (nao herda do editor), senao fica ilegivel de novo
- * se algum dia o tema mudar.
- */
-const BUBBLE_BG_RECEIVED = "#1f2c34";
-const BUBBLE_BG_SENT = "#025c4b";
-const BUBBLE_TEXT_COLOR = "#e9edef";
-const BUBBLE_META_COLOR = "#a3adb3";
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -50,9 +28,8 @@ function escapeRegExp(text: string): string {
 /**
  * A SM Click as vezes embute "*Nome*:" no INICIO do texto de mensagens
  * enviadas por um atendente (confirmado em dados reais, ex: "*IURY LIMA*:\n\nola")
- * - como o nome ja aparece no cabecalho da bolha (`who`), remove esse
- * prefixo repetido do corpo da mensagem pra nao duplicar (reportado pelo
- * usuario em 2026-09-04: "ficou muito ruim" com o nome duas vezes).
+ * - como o nome ja aparece separado (cabecalho da bolha na imagem), remove
+ * esse prefixo repetido do corpo da mensagem pra nao duplicar.
  */
 function stripSelfNamePrefix(text: string, who: string): string {
   const pattern = new RegExp(`^\\*${escapeRegExp(who)}\\*:\\s*`, "i");
@@ -60,98 +37,90 @@ function stripSelfNamePrefix(text: string, who: string): string {
 }
 
 /**
- * Uma "bolha" por mensagem - alinhada a esquerda (cliente, cinza escuro) ou
- * a direita (atendente/bot, verde escuro), pra parecer o mais possivel com
- * um print do WhatsApp (modo escuro, pra combinar com o tema do editor). So
- * mapeia os tipos ja confirmados numa conversa real (texto e menu de lista
- * do bot - ver SmclickIntegrationService); tipos de midia (imagem/audio/
- * arquivo/template) ainda nao foram confirmados na API real, entao NAO
- * inventa o nome do campo de conteudo deles - so marca que uma mensagem
- * daquele tipo existiu, pra nao quebrar nem mostrar informacao errada.
- *
- * IMPORTANTE: este HTML e colado no editor de texto rico (Quill) da tela do
- * Ticket, que SO entende um conjunto limitado de formatacao (paragrafo,
- * negrito/italico, alinhamento via `text-align`, cor/cor de fundo do texto
- * via <span style>) - qualquer coisa fora disso (div, flexbox, padding,
- * border-radius, cantos arredondados, o atributo HTML `align=`) e descartada
- * quando o Quill reprocessa o HTML. Por isso a "bolha" aqui e simulada com
- * `<p style="text-align">` + `<span style="color;background-color">`, os
- * unicos recursos que realmente sobrevivem ao editor - nao da pra ter bolha
- * com canto arredondado/avatar de verdade dentro dele.
+ * Resolve nome+texto de uma mensagem, ou null se ela nao entra no
+ * transcript. So mapeia os tipos ja confirmados numa conversa real (texto e
+ * menu de lista do bot - ver SmclickIntegrationService); tipos de midia
+ * (imagem/audio/arquivo/template) ainda nao foram confirmados na API real,
+ * entao NAO inventa o nome do campo de conteudo deles - so marca que uma
+ * mensagem daquele tipo existiu, pra nao quebrar nem mostrar informacao
+ * errada.
  */
-function messageLine(msg: SmclickMessage, contactName: string, time: string): string | null {
+function resolveMessageText(msg: SmclickMessage, contactName: string): { who: string; text: string } | null {
   // Eventos internos (chat-started, chat-waiting, etc) - nao e conversa "falada".
   if (msg.type === "system") return null;
 
   const sentByMe = msg.from_me;
   const who = sentByMe ? msg.sent_by?.name || "Bot/Automação" : contactName;
-  const align = sentByMe ? "right" : "left";
-  const bg = sentByMe ? BUBBLE_BG_SENT : BUBBLE_BG_RECEIVED;
 
-  let body: string | null = null;
   if (msg.type === "text") {
     const rawText = typeof msg.content?.text === "string" ? msg.content.text.trim() : "";
     if (!rawText) return null;
     const text = sentByMe ? stripSelfNamePrefix(rawText, who) : rawText;
     if (!text) return null;
-    body = escapeHtml(text);
-  } else if (msg.type === "list") {
-    const description = typeof msg.content?.description === "string" ? msg.content.description.trim() : "";
-    body = description ? escapeHtml(description) : "[menu de opções]";
-  } else {
-    body = `[mensagem tipo "${escapeHtml(msg.type)}"]`;
+    return { who, text };
   }
 
-  return (
-    `<p style="text-align:${align};margin:6px 0;">` +
-    `<span style="background-color:${bg};color:${BUBBLE_TEXT_COLOR};">` +
-    `<strong>${escapeHtml(who)}</strong> <span style="color:${BUBBLE_META_COLOR};">[${time}]</span><br>${body}` +
-    `</span></p>`
-  );
+  if (msg.type === "list") {
+    const description = typeof msg.content?.description === "string" ? msg.content.description.trim() : "";
+    return { who, text: description || "[menu de opções]" };
+  }
+
+  return { who, text: `[mensagem tipo "${msg.type}"]` };
 }
 
 /**
- * Prefixo fixo do HTML gerado aqui (nao muda entre a versao "em andamento" e
- * a versao final) - usado por SmclickIntegrationService pra reconhecer, entre
- * os Registros de um Ticket, qual e o Registro automatico do transcript
- * (pra atualizar em vez de duplicar a cada sincronizacao).
+ * Prefixo fixo do HTML gerado pra este Registro (nao muda entre a versao
+ * "em andamento" e a versao final) - usado por SmclickIntegrationService pra
+ * reconhecer, entre os Registros de um Ticket, qual e o Registro automatico
+ * do transcript (pra atualizar em vez de duplicar a cada sincronizacao).
  */
 export const TRANSCRIPT_HEADER_PREFIX = "<p><strong>Histórico da conversa (WhatsApp via SM Click)";
 
 /**
- * Monta o HTML do campo "Relato da Atividade" (TimeEntry.description) a
- * partir das mensagens de um atendimento SM Click - ver
- * SmclickIntegrationService.handleChatFinished e .handleNewChatMessage (essa
- * ultima sincroniza em tempo real, ANTES do atendimento finalizar - por isso
- * o parametro `finished` deixa claro no proprio texto se e um retrato ao
- * vivo ou a versao definitiva).
+ * Ordena as mensagens, filtra o que nao e "conversa falada" (eventos de
+ * sistema) e resolve nome/texto de cada uma - pronto pra virar imagem via
+ * ChatImageRenderer.renderChatImage. Separado de la porque tambem precisa
+ * do timestamp da primeira/ultima mensagem (date/start_time/end_time do
+ * Registro).
  */
-export function buildTranscript(messages: SmclickMessage[], contactName: string, finished: boolean): TranscriptResult {
+export function resolveTranscriptMessages(messages: SmclickMessage[], contactName: string): ResolvedTranscript {
   const withDates = messages
     .map((msg) => ({ msg, date: new Date(msg.sent_at) }))
     .filter(({ date }) => !Number.isNaN(date.getTime()))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  if (withDates.length === 0) {
-    return {
-      html: "<p><em>Nenhuma mensagem encontrada neste atendimento.</em></p>",
-      firstMessageAt: null,
-      lastMessageAt: null,
-    };
+  const items: RenderableMessage[] = [];
+  for (const { msg, date } of withDates) {
+    const resolved = resolveMessageText(msg, contactName);
+    if (!resolved) continue;
+    items.push({ who: resolved.who, time: formatTime(date), text: resolved.text, sentByMe: msg.from_me });
   }
 
-  const lines = withDates
-    .map(({ msg, date }) => messageLine(msg, contactName, formatTime(date)))
-    .filter((line): line is string => line !== null);
-
-  const suffix = finished ? "" : " — atualizado automaticamente, atendimento ainda em andamento";
-  const html =
-    `${TRANSCRIPT_HEADER_PREFIX}${suffix}:</strong></p>` +
-    (lines.length > 0 ? lines.join("") : "<p><em>Atendimento sem mensagens de texto (so eventos internos).</em></p>");
-
   return {
-    html,
-    firstMessageAt: withDates[0]!.date,
-    lastMessageAt: withDates[withDates.length - 1]!.date,
+    items,
+    firstMessageAt: withDates[0]?.date ?? null,
+    lastMessageAt: withDates[withDates.length - 1]?.date ?? null,
   };
+}
+
+/**
+ * Monta o HTML final do campo "Relato da Atividade" (TimeEntry.description):
+ * um cabecalho de texto (reconhecivel por TRANSCRIPT_HEADER_PREFIX) + a
+ * imagem da conversa (ou um aviso, se nao tiver nenhuma mensagem "falada").
+ * `finished` deixa claro no proprio texto se e um retrato ao vivo
+ * (atendimento ainda em andamento) ou a versao definitiva.
+ *
+ * `imageUrl` nulo so acontece quando o atendimento tem timestamp (chamador
+ * ja confirmou isso antes de chegar aqui - ver
+ * SmclickIntegrationService.renderTranscriptContent) mas NENHUMA mensagem de
+ * texto/lista - ou seja, so eventos internos (chat-started, chat-waiting,
+ * etc) - por isso o aviso e especifico, nao um generico "nenhuma mensagem".
+ */
+export function buildTranscriptDescriptionHtml(finished: boolean, imageUrl: string | null): string {
+  const suffix = finished ? "" : " — atualizado automaticamente, atendimento ainda em andamento";
+  const header = `${TRANSCRIPT_HEADER_PREFIX}${suffix}:</strong></p>`;
+  if (!imageUrl) {
+    return `${header}<p><em>Atendimento sem mensagens de texto (so eventos internos).</em></p>`;
+  }
+  return `${header}<p><img src="${imageUrl}" alt="Histórico da conversa (print)" /></p>`;
 }

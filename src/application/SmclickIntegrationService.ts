@@ -1,13 +1,29 @@
+import { env } from "../config/env";
 import { ClientRepository } from "../infrastructure/base44/ClientRepository";
 import { KanbanConfigRepository } from "../infrastructure/base44/KanbanConfigRepository";
 import { TicketEventRepository } from "../infrastructure/base44/TicketEventRepository";
 import { TicketRepository } from "../infrastructure/base44/TicketRepository";
 import { TimeEntryRepository } from "../infrastructure/base44/TimeEntryRepository";
+import { renderChatImage } from "../infrastructure/rendering/ChatImageRenderer";
 import type { SmclickApiClient, SmclickAttendant } from "../infrastructure/smclick/SmclickApiClient";
+import { saveNamedFile } from "../services/uploadStorage";
 import type { ClientRecord, KanbanColumn, TicketRecord } from "../types/entities";
-import { buildTranscript, formatDateSaoPaulo, formatTimeSaoPaulo, TRANSCRIPT_HEADER_PREFIX, type TranscriptResult } from "./smclickTranscript";
+import {
+  buildTranscriptDescriptionHtml,
+  formatDateSaoPaulo,
+  formatTimeSaoPaulo,
+  resolveTranscriptMessages,
+  TRANSCRIPT_HEADER_PREFIX,
+  type ResolvedTranscript,
+} from "./smclickTranscript";
 import type { TicketActionsService } from "./TicketActionsService";
 import type { TicketCreationHooks } from "./TicketCreationHooks";
+
+interface TranscriptContent {
+  html: string;
+  firstMessageAt: Date;
+  lastMessageAt: Date;
+}
 
 export interface SmclickChat {
   id?: string;
@@ -312,10 +328,11 @@ export class SmclickIntegrationService {
 
     try {
       const messages = await this.smclickApi.getChatMessages(chat.protocol);
-      const transcript = buildTranscript(messages, ticket.client_name || chat.contact?.name || "Cliente", false);
-      if (!transcript.firstMessageAt || !transcript.lastMessageAt) {
+      const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente");
+      if (!resolved.firstMessageAt || !resolved.lastMessageAt) {
         return { status: "skipped", reason: "sem_mensagens" };
       }
+      const content = await this.renderTranscriptContent(ticket.id, resolved, false);
 
       // upsertTranscriptEntry serializa por ticket e releem o estado mais
       // recente antes de gravar - protege contra um chat-finished (ou o
@@ -323,7 +340,7 @@ export class SmclickIntegrationService {
       // false, a versao definitiva ja chegou primeiro - nao reportar
       // "synced" quando na verdade nada foi escrito.
       const attendant = resolvePrincipalAttendant(chat);
-      const wrote = await this.upsertTranscriptEntry(ticket, transcript, {
+      const wrote = await this.upsertTranscriptEntry(ticket, content, {
         technicianEmail: attendant?.email || this.serviceEmail,
         technicianName: attendant?.name || "SM Click (automático)",
         normalHours: 0,
@@ -389,18 +406,19 @@ export class SmclickIntegrationService {
 
     const messages = await this.smclickApi.getChatMessages(protocol);
     const finished = chatDetails.status === "finished";
-    const transcript = buildTranscript(messages, ticket.client_name || chatDetails.contact?.name || "Cliente", finished);
-    if (!transcript.firstMessageAt || !transcript.lastMessageAt) {
+    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chatDetails.contact?.name || "Cliente");
+    if (!resolved.firstMessageAt || !resolved.lastMessageAt) {
       return { status: "skipped", reason: "sem_mensagens" };
     }
+    const content = await this.renderTranscriptContent(ticket.id, resolved, finished);
 
     const attendant = resolvePrincipalAttendant(chatDetails);
     return {
       status: "ok",
-      html: transcript.html,
-      date: formatDateSaoPaulo(transcript.firstMessageAt),
-      startTime: formatTimeSaoPaulo(transcript.firstMessageAt),
-      endTime: formatTimeSaoPaulo(transcript.lastMessageAt),
+      html: content.html,
+      date: formatDateSaoPaulo(content.firstMessageAt),
+      startTime: formatTimeSaoPaulo(content.firstMessageAt),
+      endTime: formatTimeSaoPaulo(content.lastMessageAt),
       finished,
       normalHours: finished ? this.sanitizeAttendingHours(chatDetails.attending_time, ticket.id) : 0,
       technicianEmail: attendant?.email || "",
@@ -429,13 +447,14 @@ export class SmclickIntegrationService {
     if (!chat.protocol) return;
 
     const messages = await this.smclickApi.getChatMessages(chat.protocol);
-    const transcript = buildTranscript(messages, ticket.client_name || chat.contact?.name || "Cliente", true);
-    if (!transcript.firstMessageAt || !transcript.lastMessageAt) return;
+    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente");
+    if (!resolved.firstMessageAt || !resolved.lastMessageAt) return;
+    const content = await this.renderTranscriptContent(ticket.id, resolved, true);
 
     const attendant = resolvePrincipalAttendant(chat);
     const attendingHours = this.sanitizeAttendingHours(chat.attending_time, ticket.id);
 
-    await this.upsertTranscriptEntry(ticket, transcript, {
+    await this.upsertTranscriptEntry(ticket, content, {
       technicianEmail: attendant?.email || this.serviceEmail,
       technicianName: attendant?.name || "SM Click (automático)",
       normalHours: attendingHours,
@@ -449,6 +468,31 @@ export class SmclickIntegrationService {
       user_email: this.serviceEmail,
       visible_to_client: false,
     });
+  }
+
+  /**
+   * Renderiza a imagem da conversa (estilo print do WhatsApp - ver
+   * ChatImageRenderer) e salva com um nome ESTAVEL por ticket
+   * (`smclick-transcript-<ticketId>.png`), sobrescrevendo a cada
+   * sincronizacao em vez de acumular um arquivo novo por vez. O `?v=`
+   * (timestamp) na URL e so pra evitar que o navegador do analista mostre
+   * uma versao antiga em cache depois de uma resincronizacao pro mesmo
+   * ticket (o nome do arquivo em si nao muda).
+   */
+  private async renderTranscriptContent(ticketId: string, resolved: ResolvedTranscript, finished: boolean): Promise<TranscriptContent> {
+    let imageUrl: string | null = null;
+    if (resolved.items.length > 0) {
+      const png = await renderChatImage(resolved.items);
+      const filename = `smclick-transcript-${ticketId}.png`;
+      await saveNamedFile(png, filename);
+      imageUrl = `${env.publicBaseUrl}/uploads/${filename}?v=${Date.now()}`;
+    }
+
+    return {
+      html: buildTranscriptDescriptionHtml(finished, imageUrl),
+      firstMessageAt: resolved.firstMessageAt!,
+      lastMessageAt: resolved.lastMessageAt!,
+    };
   }
 
   /**
@@ -466,11 +510,9 @@ export class SmclickIntegrationService {
    */
   private async upsertTranscriptEntry(
     ticket: TicketRecord,
-    transcript: TranscriptResult,
+    content: TranscriptContent,
     opts: { technicianEmail: string; technicianName: string; normalHours: number; hourType: "normal" | "interna" }
   ): Promise<boolean> {
-    if (!transcript.firstMessageAt || !transcript.lastMessageAt) return false;
-
     return this.withTranscriptLock(ticket.id, async () => {
       const existing = (await this.timeEntries.findByTicket(ticket.id)).find((entry) =>
         entry.description?.startsWith(TRANSCRIPT_HEADER_PREFIX)
@@ -487,10 +529,10 @@ export class SmclickIntegrationService {
       const data = {
         ticket_id: ticket.id,
         ticket_title: ticket.title,
-        date: formatDateSaoPaulo(transcript.firstMessageAt!),
-        start_time: formatTimeSaoPaulo(transcript.firstMessageAt!),
-        end_time: formatTimeSaoPaulo(transcript.lastMessageAt!),
-        description: transcript.html,
+        date: formatDateSaoPaulo(content.firstMessageAt),
+        start_time: formatTimeSaoPaulo(content.firstMessageAt),
+        end_time: formatTimeSaoPaulo(content.lastMessageAt),
+        description: content.html,
         hour_type: opts.hourType,
         normal_hours: opts.normalHours,
         extra_hours: 0,

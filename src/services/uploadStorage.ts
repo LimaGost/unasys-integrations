@@ -23,3 +23,16 @@ export function safeExtension(originalName: string): string {
   const ext = path.extname(originalName || "").toLowerCase();
   return /^\.[a-z0-9]{1,10}$/.test(ext) ? ext : "";
 }
+
+/**
+ * Salva (ou sobrescreve) um arquivo com um nome ESTAVEL, escolhido pelo
+ * chamador - diferente de saveUploadedFile (nome UUID novo sempre), usado
+ * quando faz sentido ter um unico arquivo por "dono" que se atualiza no
+ * lugar (ex: a imagem do transcript de um Ticket, gerada de novo a cada
+ * sincronizacao - ver SmclickIntegrationService). `filename` e sempre
+ * escolhido internamente (nunca vem de input externo).
+ */
+export async function saveNamedFile(buffer: Buffer, filename: string): Promise<void> {
+  await mkdir(UPLOADS_DIR, { recursive: true });
+  await writeFile(path.join(UPLOADS_DIR, filename), buffer);
+}
