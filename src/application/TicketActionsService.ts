@@ -72,45 +72,13 @@ export class TicketActionsService {
       throw Object.assign(new Error("Campo obrigatorio: ticketId."), { status: 400 });
     }
 
-    const ticket = await this.tickets.findById(ticketId);
-    const { totalNormalHours, totalExtraHours } = await this.computeAndStoreHours(ticketId, ticket);
+    const entries = await this.timeEntries.findByTicket(ticketId);
+    const totalNormalHours = Math.round(entries.reduce((sum, e) => sum + (e.normal_hours || 0), 0) * 100) / 100;
+    const totalExtraHours = Math.round(entries.reduce((sum, e) => sum + (e.extra_hours || 0), 0) * 100) / 100;
 
-    // Horas de um atendimento vinculado a um projeto de Implantacao (ver
-    // designateAsImplantacao) "sobem" pro total do ticket pai - pedido do
-    // usuario em 2026-09-04: o historico do projeto de Implantacao precisa
-    // refletir tambem as horas do atendimento (ex: SM Click) linkado a ele.
-    if (ticket?.parent_ticket_id) {
-      await this.computeAndStoreHours(ticket.parent_ticket_id);
-    }
+    await this.tickets.update(ticketId, { total_normal_hours: totalNormalHours, total_extra_hours: totalExtraHours });
 
     return { ticketId, totalNormalHours, totalExtraHours };
-  }
-
-  /**
-   * Calcula e grava o total de horas de um ticket: soma dos seus proprios
-   * Registros (TimeEntry) +, se for um ticket de Implantacao, o total ja
-   * calculado de cada ticket filho vinculado a ele (parent_ticket_id) - so
-   * um nivel, nao segue filho-de-filho. A consulta extra de filhos so roda
-   * pra tickets de Implantacao (main_type) porque so eles podem ser "pai" -
-   * evita pagar essa query extra em TODO salvamento de Registro do sistema,
-   * ja que a grande maioria dos tickets (Suporte) nunca tem filho.
-   */
-  private async computeAndStoreHours(ticketId: string, ticket?: TicketRecord | null): Promise<{ totalNormalHours: number; totalExtraHours: number }> {
-    const resolvedTicket = ticket === undefined ? await this.tickets.findById(ticketId) : ticket;
-    const entries = await this.timeEntries.findByTicket(ticketId);
-    let normal = entries.reduce((sum, e) => sum + (e.normal_hours || 0), 0);
-    let extra = entries.reduce((sum, e) => sum + (e.extra_hours || 0), 0);
-
-    if (resolvedTicket?.main_type === "implantacao") {
-      const children = await this.tickets.findMany({ parent_ticket_id: ticketId });
-      normal += children.reduce((sum, t) => sum + (t.total_normal_hours || 0), 0);
-      extra += children.reduce((sum, t) => sum + (t.total_extra_hours || 0), 0);
-    }
-
-    const totalNormalHours = Math.round(normal * 100) / 100;
-    const totalExtraHours = Math.round(extra * 100) / 100;
-    await this.tickets.update(ticketId, { total_normal_hours: totalNormalHours, total_extra_hours: totalExtraHours });
-    return { totalNormalHours, totalExtraHours };
   }
 
   async updateStatus(command: UpdateTicketStatusCommand, actor: TicketActor): Promise<UpdateTicketStatusResult> {
@@ -291,11 +259,58 @@ export class TicketActionsService {
       parent_ticket_title: parent.title,
     });
 
-    // As horas que esse ticket ja tinha registradas (ex: Registro do
-    // historico do WhatsApp) precisam refletir no total do pai imediatamente
-    // ao vincular, sem esperar o proximo Registro ser salvo - pedido do
-    // usuario em 2026-09-04.
-    await this.recomputeHours(ticket.id);
+    // Os Registros (TimeEntry) ja lancados neste atendimento - inclusive o
+    // historico do WhatsApp - e seus eventos de auditoria (TicketEvent tipo
+    // "time_entry") passam a pertencer ao ticket PAI: aparecem direto na
+    // Linha do Tempo dele e contam nas horas dele sem duplicar em lugar
+    // nenhum - pedido do usuario em 2026-09-04 ("cai direto na linha do
+    // tempo do ticket"). Um "somar" separado (deixando os Registros no
+    // filho e so espelhando o total no pai) foi tentado antes e duplicava
+    // horas em qualquer relatorio/tela que soma total_normal_hours de TODOS
+    // os tickets (Reports, KanbanCard, ClientDetail) - achado real de bug
+    // reportado pelo usuario no mesmo dia. O ticket filho continua existindo
+    // (rastreio via parent_ticket_id/RelatedTicketsPanel), so fica sem
+    // Registros proprios dai pra frente - novos Registros salvos apos o
+    // vinculo ja sao criados direto no pai (ver ActivityPanel.jsx).
+    // Limite explicito (nao o default de 50 do SDK) - um atendimento de
+    // WhatsApp com conversa longa pode facilmente passar de 50 Registros
+    // sincronizados ao vivo antes de ser vinculado.
+    const REPARENT_QUERY_LIMIT = 500;
+    const [childEntries, childTimeEntryEvents] = await Promise.all([
+      this.timeEntries.findMany({ ticket_id: ticket.id }, undefined, REPARENT_QUERY_LIMIT),
+      this.ticketEvents.findMany({ ticket_id: ticket.id, type: "time_entry" }, undefined, REPARENT_QUERY_LIMIT),
+    ]);
+
+    // Sequencial e tolerante a falha individual (nao Promise.all "tudo ou
+    // nada"): como o guard `ja_e_implantacao` (acima) torna esta acao
+    // one-shot, um Promise.all que aborta no meio deixaria Registros
+    // partidos entre filho e pai pra sempre, sem chance de retry. Aqui, se
+    // um item falhar, os outros ainda migram e o recalculo de horas roda do
+    // mesmo jeito no final - so loga o que falhou pra follow-up manual.
+    let reparentFailures = 0;
+    for (const entry of childEntries) {
+      try {
+        await this.timeEntries.update(entry.id, { ticket_id: parent.id, ticket_title: parent.title });
+      } catch (error) {
+        reparentFailures++;
+        console.error(`[ticket-actions] falha ao reparentar TimeEntry ${entry.id} (${ticket.id} -> ${parent.id}):`, error);
+      }
+    }
+    for (const event of childTimeEntryEvents) {
+      try {
+        await this.ticketEvents.update(event.id, { ticket_id: parent.id });
+      } catch (error) {
+        reparentFailures++;
+        console.error(`[ticket-actions] falha ao reparentar TicketEvent ${event.id} (${ticket.id} -> ${parent.id}):`, error);
+      }
+    }
+    if (reparentFailures > 0) {
+      console.error(`[ticket-actions] designateAsImplantacao: ${reparentFailures} item(ns) nao migrados de ${ticket.id} pra ${parent.id} - conferir manualmente.`);
+    }
+
+    if (childEntries.length > 0) {
+      await Promise.all([this.recomputeHours(parent.id), this.recomputeHours(ticket.id)]);
+    }
 
     await this.ticketEvents.create({
       ticket_id: ticket.id,
