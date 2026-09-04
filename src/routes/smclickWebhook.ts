@@ -12,7 +12,9 @@ import type { SmclickChat } from "../application/SmclickIntegrationService";
  * das outras integracoes deste servico, que usam o header x-webhook-token -
  * ver middleware/auth.ts), entao o token vai na propria URL: cadastre a URL
  * completa (com o token, gerada no painel /dashboard) no painel da SM Click,
- * em Webhooks, para os eventos `new-chat` e `chat-finished`.
+ * em Webhooks, para os eventos `chat-started` e `chat-finished`. O gatilho de
+ * criacao e `chat-started` (nao `new-chat`) de proposito - ver o comentario
+ * no topo de application/SmclickIntegrationService.ts.
  *
  * Qualquer outro evento cadastrado nessa mesma URL e apenas ignorado (200),
  * para nao gerar "erro" no painel da SM Click - a logica de negocio fica em
@@ -52,8 +54,8 @@ router.post(
       return;
     }
 
-    if (body.event === "new-chat") {
-      const result = await smclickIntegrationService.handleNewChat(chat);
+    if (body.event === "chat-started") {
+      const result = await smclickIntegrationService.handleChatStarted(chat);
       res.status(200).json(result);
       return;
     }

@@ -262,11 +262,13 @@ export const DASHBOARD_HTML = `<!doctype html>
         <span class="pill" id="smclickStatusPill">verificando</span>
       </div>
       <p class="settings-desc">
-        Cria o Ticket sozinho quando um cliente manda a primeira mensagem no WhatsApp
-        (evento <code>new-chat</code>) e fecha o Ticket sozinho quando o atendimento termina
-        na SM Click (evento <code>chat-finished</code>). Cadastre a URL completa abaixo (ja
-        inclui o token) no painel da SM Click, em Webhooks, para os dois eventos. Departamento
-        SM Click vira vertical do Unasys Tickets: Retail → Retail, Farma → Farma, Degust → Food.
+        Cria o Ticket (em Suporte) sozinho quando um atendente de fato assume a conversa no
+        WhatsApp (evento <code>chat-started</code> - estagio "ATIVO" na SM Click; leads em
+        triagem ou na fila de espera NAO criam ticket) e fecha o Ticket sozinho quando o
+        atendimento termina la (evento <code>chat-finished</code>). Cadastre a URL completa
+        abaixo (ja inclui o token) no painel da SM Click, em Webhooks, para os dois eventos.
+        Departamento SM Click vira vertical do Unasys Tickets: Retail → Retail, Farma → Farma,
+        Degust → Food.
       </p>
       <div class="token-row">
         <span class="token-label">URL completa</span>

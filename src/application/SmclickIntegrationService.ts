@@ -26,7 +26,7 @@ export type SmclickEventResult =
  * mapeado para "food" a pedido do usuario (confirmado em 2026-09-04) - se um
  * novo departamento for criado na SM Click, adicione a linha aqui, senao os
  * atendimentos daquele departamento caem em "departamento_nao_mapeado" e
- * NENHUM ticket e criado (ver handleNewChat).
+ * NENHUM ticket e criado (ver handleChatStarted).
  */
 const DEPARTMENT_VERTICAL: Record<string, string> = {
   "3f3e80af-691b-4808-9863-fabb4cf8074b": "retail", // Retail
@@ -36,9 +36,16 @@ const DEPARTMENT_VERTICAL: Record<string, string> = {
 
 /**
  * Porta as duas primeiras integracoes com a SM Click (atendimento via
- * WhatsApp): o Ticket nasce sozinho quando o cliente manda a primeira
- * mensagem (evento `new-chat`) e fecha sozinho quando o atendimento termina
- * la (evento `chat-finished`). Chamado por routes/smclickWebhook.ts.
+ * WhatsApp): o Ticket nasce sozinho quando um atendente de fato assume a
+ * conversa (evento `chat-started`) e fecha sozinho quando o atendimento
+ * termina la (evento `chat-finished`). Chamado por routes/smclickWebhook.ts.
+ *
+ * O gatilho de criacao e `chat-started` (estagio "ATIVO" na SM Click), NAO
+ * `new-chat` (estagio "LEADS"/triagem) nem a espera na fila (estagio
+ * "AGUARDANDO") - decisao confirmada com o usuario em 2026-09-04: um
+ * atendimento so "comeca de verdade" quando alguem inicia ele, senao toda
+ * mensagem recebida (inclusive de leads que nunca viram atendimento de
+ * verdade) geraria um ticket.
  *
  * NAO faz nenhuma chamada de volta pra API da SM Click (enviar mensagem,
  * etc.) - so recebe os dois eventos. Isso e trabalho futuro (ver conversa
@@ -46,12 +53,12 @@ const DEPARTMENT_VERTICAL: Record<string, string> = {
  */
 export class SmclickIntegrationService {
   /**
-   * Trava em memoria contra duas entregas do mesmo evento `new-chat` chegando
-   * quase juntas (retry da SM Click, ou o mesmo evento reenviado): sem isto,
-   * as duas passariam pelo `findOne` antes de qualquer uma ter criado o
-   * Ticket, e as duas criariam um Ticket (e possivelmente um Client)
-   * duplicado. So protege dentro deste processo - suficiente aqui porque este
-   * servico roda como uma unica instancia (ver index.ts).
+   * Trava em memoria contra duas entregas do mesmo evento `chat-started`
+   * chegando quase juntas (retry da SM Click, ou o mesmo evento reenviado):
+   * sem isto, as duas passariam pelo `findOne` antes de qualquer uma ter
+   * criado o Ticket, e as duas criariam um Ticket (e possivelmente um
+   * Client) duplicado. So protege dentro deste processo - suficiente aqui
+   * porque este servico roda como uma unica instancia (ver index.ts).
    */
   private readonly chatsBeingCreated = new Set<string>();
 
@@ -65,7 +72,7 @@ export class SmclickIntegrationService {
     private readonly serviceEmail: string
   ) {}
 
-  async handleNewChat(chat: SmclickChat): Promise<SmclickEventResult> {
+  async handleChatStarted(chat: SmclickChat): Promise<SmclickEventResult> {
     if (!chat.id || !chat.contact?.telephone) {
       return { status: "skipped", reason: "payload_incompleto" };
     }
