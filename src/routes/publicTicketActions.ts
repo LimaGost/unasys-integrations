@@ -204,8 +204,10 @@ router.post(
 
 /**
  * Botao "Marcar como Implantação" na tela do Ticket (Base44) - designa um
- * ticket de Suporte como Implantação e vincula ao projeto de Implantação em
- * aberto do cliente. Ver TicketActionsService.designateAsImplantacao.
+ * ticket de Suporte como Implantação e vincula a um ticket de Implantação ja
+ * existente, ESCOLHIDO PELO ANALISTA numa busca no frontend (parent_ticket_id
+ * vem no corpo do request, nao e mais auto-selecionado aqui). Ver
+ * TicketActionsService.designateAsImplantacao.
  */
 router.post(
   "/designate-implantacao",
@@ -213,15 +215,16 @@ router.post(
     if (!requireToken(req, res)) return;
 
     const ticketId = typeof req.body?.ticket_id === "string" ? req.body.ticket_id : "";
+    const parentTicketId = typeof req.body?.parent_ticket_id === "string" ? req.body.parent_ticket_id : "";
     const actorEmail = typeof req.body?.actor_email === "string" ? req.body.actor_email : "";
     const actorName = typeof req.body?.actor_name === "string" && req.body.actor_name ? req.body.actor_name : actorEmail;
 
-    if (!ticketId || !actorEmail) {
-      res.status(400).json({ error: "BadRequest", message: "Campos obrigatorios: ticket_id, actor_email." });
+    if (!ticketId || !parentTicketId || !actorEmail) {
+      res.status(400).json({ error: "BadRequest", message: "Campos obrigatorios: ticket_id, parent_ticket_id, actor_email." });
       return;
     }
 
-    const result = await ticketActionsService.designateAsImplantacao(ticketId, { email: actorEmail, name: actorName });
+    const result = await ticketActionsService.designateAsImplantacao(ticketId, parentTicketId, { email: actorEmail, name: actorName });
     res.status(200).json(result);
   })
 );

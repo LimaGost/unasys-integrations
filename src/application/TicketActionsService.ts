@@ -197,14 +197,22 @@ export class TicketActionsService {
   }
 
   /**
-   * Designa um ticket de Suporte como Implantação e vincula ao projeto de
-   * Implantação ABERTO mais recente do mesmo cliente (via parent_ticket_id -
-   * o mesmo campo que RelatedTicketsPanel.jsx, no Base44, ja usa de verdade
-   * pra "Ticket Pai/Filhos") - pedido do usuario em 2026-09-04. Chamado
-   * direto do navegador (botao na tela do Ticket), migrado pra ca em vez de
-   * chamadas diretas `base44.entities.*` no frontend, mesmo motivo das
-   * outras rotas /public/ticket-actions/*: nao gerar custo de credito de
-   * integracao no Base44.
+   * Designa um ticket de Suporte como Implantação e vincula a um ticket de
+   * Implantação JA EXISTENTE, escolhido manualmente pelo analista numa busca
+   * na tela do Ticket (via parent_ticket_id - o mesmo campo que
+   * RelatedTicketsPanel.jsx, no Base44, ja usa de verdade pra "Ticket
+   * Pai/Filhos") - pedido do usuario em 2026-09-04. Antes este metodo
+   * escolhia sozinho "o ticket de Implantação aberto mais recente do
+   * cliente"; o usuario corrigiu no mesmo dia: precisa ser o analista
+   * buscando e identificando o ticket certo, nao um auto-pick (podia linkar
+   * no projeto errado quando o cliente tem mais de uma Implantação aberta).
+   * A busca em si (listar tickets de Implantação do cliente) roda direto no
+   * frontend via base44.entities.Ticket.filter - e leitura, mesmo padrao ja
+   * usado em todo o app (Tickets.jsx, SearchableSelect etc), so a GRAVACAO
+   * passa por aqui. Chamado direto do navegador (botao na tela do Ticket),
+   * migrado pra ca em vez de chamadas diretas `base44.entities.*` no
+   * frontend, mesmo motivo das outras rotas /public/ticket-actions/*: nao
+   * gerar custo de credito de integracao no Base44.
    *
    * A coluna inicial e a de menor `order` (nao-final) do KanbanConfig de
    * Implantação da vertical do ticket - o quadro de Implantação (Tickets.jsx,
@@ -213,8 +221,8 @@ export class TicketActionsService {
    * entao nao ha risco do ticket ficar orfao so por causa do ticket_type -
    * mesma logica ja usada em SmclickIntegrationService pro lado de Suporte.
    */
-  async designateAsImplantacao(ticketId: string, actor: TicketActor): Promise<DesignateImplantacaoResult> {
-    const ticket = await this.tickets.findById(ticketId);
+  async designateAsImplantacao(ticketId: string, parentTicketId: string, actor: TicketActor): Promise<DesignateImplantacaoResult> {
+    const [ticket, parent] = await Promise.all([this.tickets.findById(ticketId), this.tickets.findById(parentTicketId)]);
     if (!ticket) {
       return { status: "skipped", reason: "ticket_nao_encontrado" };
     }
@@ -225,12 +233,11 @@ export class TicketActionsService {
       return { status: "skipped", reason: "ticket_sem_cliente" };
     }
 
-    const implantacaoTickets = await this.tickets.findMany({ client_id: ticket.client_id, main_type: "implantacao" });
-    const parent = implantacaoTickets
-      .filter((t) => !t.closed_at)
-      .sort((a, b) => new Date(b.created_date).getTime() - new Date(a.created_date).getTime())[0];
-    if (!parent) {
-      return { status: "skipped", reason: "cliente_sem_implantacao_aberta" };
+    if (!parent || parent.main_type !== "implantacao") {
+      return { status: "skipped", reason: "ticket_pai_invalido" };
+    }
+    if (parent.client_id !== ticket.client_id) {
+      return { status: "skipped", reason: "ticket_pai_de_outro_cliente" };
     }
 
     const configs = await this.kanbanConfigs.findMany({ main_type: "implantacao", vertical: ticket.vertical });
