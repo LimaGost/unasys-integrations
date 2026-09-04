@@ -37,15 +37,38 @@ function stripSelfNamePrefix(text: string, who: string): string {
 }
 
 /**
- * Resolve nome+texto de uma mensagem, ou null se ela nao entra no
- * transcript. So mapeia os tipos ja confirmados numa conversa real (texto e
- * menu de lista do bot - ver SmclickIntegrationService); tipos de midia
- * (imagem/audio/arquivo/template) ainda nao foram confirmados na API real,
- * entao NAO inventa o nome do campo de conteudo deles - so marca que uma
- * mensagem daquele tipo existiu, pra nao quebrar nem mostrar informacao
- * errada.
+ * Extensoes/subtipos confirmados em fotos reais trocadas por WhatsApp via SM
+ * Click em 2026-09-04 (campo `content.type` da mensagem, ex: "jpeg") - a SM
+ * Click usa o MESMO `msg.type` ("file") pra foto E pra audio-como-arquivo,
+ * entao so da pra distinguir pelo subtipo aqui dentro do content.
  */
-function resolveMessageText(msg: SmclickMessage, contactName: string): { who: string; text: string } | null {
+const IMAGE_CONTENT_TYPES = new Set(["jpeg", "jpg", "png", "gif", "webp", "bmp"]);
+
+function isImageContentType(contentType: unknown): contentType is string {
+  return typeof contentType === "string" && IMAGE_CONTENT_TYPES.has(contentType.toLowerCase());
+}
+
+function formatAudioLabel(content: Record<string, unknown> | undefined): string {
+  const duration = typeof content?.duration === "number" ? Math.round(content.duration) : undefined;
+  return duration !== undefined ? `[Áudio - ${duration}s]` : "[Áudio]";
+}
+
+/** Uniao discriminada de verdade (nao dois opcionais soltos) - garante em tempo de compilacao que "media" sempre tem mediaUrl e "text" sempre tem text, sem revalidacao manual em quem consome. */
+type ResolvedMessageContent = { who: string; kind: "text"; text: string } | { who: string; kind: "media"; mediaUrl: string };
+
+/**
+ * Resolve nome + conteudo (texto OU foto) de uma mensagem, ou null se ela
+ * nao entra no transcript. Mapeia texto, menu de lista do bot, foto real
+ * (baixada e embutida na imagem final - ver ChatImageRenderer) e
+ * audio/arquivo (legenda descritiva, sem foto pra mostrar) - confirmado
+ * contra dados reais de conversa em 2026-09-04 (ver comentario de
+ * IMAGE_CONTENT_TYPES). So reconhece `msg.type === "file"` com
+ * `content.type` de imagem pra foto (nunca visto `msg.type === "image"` na
+ * API real - se um dia aparecer, confirmar o formato do content antes de
+ * tratar como foto, em vez de assumir). Tipos ainda nao vistos na API real
+ * caem no fallback generico, sem inventar campo de conteudo.
+ */
+function resolveMessageContent(msg: SmclickMessage, contactName: string): ResolvedMessageContent | null {
   // Eventos internos (chat-started, chat-waiting, etc) - nao e conversa "falada".
   if (msg.type === "system") return null;
 
@@ -57,15 +80,31 @@ function resolveMessageText(msg: SmclickMessage, contactName: string): { who: st
     if (!rawText) return null;
     const text = sentByMe ? stripSelfNamePrefix(rawText, who) : rawText;
     if (!text) return null;
-    return { who, text };
+    return { who, kind: "text", text };
   }
 
   if (msg.type === "list") {
     const description = typeof msg.content?.description === "string" ? msg.content.description.trim() : "";
-    return { who, text: description || "[menu de opções]" };
+    return { who, kind: "text", text: description || "[menu de opções]" };
   }
 
-  return { who, text: `[mensagem tipo "${msg.type}"]` };
+  if (msg.type === "file") {
+    const url = typeof msg.content?.url === "string" ? msg.content.url : undefined;
+    const contentType = msg.content?.type;
+    if (url && isImageContentType(contentType)) {
+      return { who, kind: "media", mediaUrl: url };
+    }
+    if (typeof contentType === "string" && contentType.startsWith("audio")) {
+      return { who, kind: "text", text: formatAudioLabel(msg.content) };
+    }
+    return { who, kind: "text", text: "[Arquivo enviado]" };
+  }
+
+  if (msg.type === "audio") {
+    return { who, kind: "text", text: formatAudioLabel(msg.content) };
+  }
+
+  return { who, kind: "text", text: `[mensagem tipo "${msg.type}"]` };
 }
 
 /**
@@ -78,12 +117,21 @@ export const TRANSCRIPT_HEADER_PREFIX = "<p><strong>Histórico da conversa (What
 
 /**
  * Ordena as mensagens, filtra o que nao e "conversa falada" (eventos de
- * sistema) e resolve nome/texto de cada uma - pronto pra virar imagem via
+ * sistema) e resolve nome/texto de cada una - pronto pra virar imagem via
  * ChatImageRenderer.renderChatImage. Separado de la porque tambem precisa
  * do timestamp da primeira/ultima mensagem (date/start_time/end_time do
  * Registro).
+ *
+ * `includeMedia=false` troca toda foto por uma legenda "[Imagem]" (SEM
+ * baixar nada da SM Click) - usado pela sincronizacao AO VIVO
+ * (handleNewChatMessage, a cada mensagem nova, debounced em 45s): sem isto,
+ * cada sincronizacao de uma conversa com varias fotos baixava/recomprimia
+ * TODAS elas de novo, mesmo as que ja tinham sido buscadas minutos antes -
+ * achado real de code-review em 2026-09-04. A versao definitiva
+ * (chat-finished) e o botao sob demanda continuam com includeMedia=true,
+ * ja que rodam bem menos vezes por atendimento.
  */
-export function resolveTranscriptMessages(messages: SmclickMessage[], contactName: string): ResolvedTranscript {
+export function resolveTranscriptMessages(messages: SmclickMessage[], contactName: string, includeMedia: boolean): ResolvedTranscript {
   const withDates = messages
     .map((msg) => ({ msg, date: new Date(msg.sent_at) }))
     .filter(({ date }) => !Number.isNaN(date.getTime()))
@@ -91,9 +139,18 @@ export function resolveTranscriptMessages(messages: SmclickMessage[], contactNam
 
   const items: RenderableMessage[] = [];
   for (const { msg, date } of withDates) {
-    const resolved = resolveMessageText(msg, contactName);
+    const resolved = resolveMessageContent(msg, contactName);
     if (!resolved) continue;
-    items.push({ who: resolved.who, time: formatTime(date), text: resolved.text, sentByMe: msg.from_me });
+    const time = formatTime(date);
+    if (resolved.kind === "media") {
+      items.push(
+        includeMedia
+          ? { who: resolved.who, time, sentByMe: msg.from_me, kind: "media", mediaUrl: resolved.mediaUrl }
+          : { who: resolved.who, time, sentByMe: msg.from_me, kind: "text", text: "[Imagem]" }
+      );
+    } else {
+      items.push({ who: resolved.who, time, sentByMe: msg.from_me, kind: "text", text: resolved.text });
+    }
   }
 
   return {

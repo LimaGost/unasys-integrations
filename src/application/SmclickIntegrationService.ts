@@ -328,7 +328,10 @@ export class SmclickIntegrationService {
 
     try {
       const messages = await this.smclickApi.getChatMessages(chat.protocol);
-      const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente");
+      // includeMedia=false: sincronizacao ao vivo NAO baixa foto nenhuma (ver
+      // doc de resolveTranscriptMessages) - so a versao definitiva/o botao
+      // sob demanda embutem foto de verdade.
+      const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente", false);
       if (!resolved.firstMessageAt || !resolved.lastMessageAt) {
         return { status: "skipped", reason: "sem_mensagens" };
       }
@@ -406,7 +409,7 @@ export class SmclickIntegrationService {
 
     const messages = await this.smclickApi.getChatMessages(protocol);
     const finished = chatDetails.status === "finished";
-    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chatDetails.contact?.name || "Cliente");
+    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chatDetails.contact?.name || "Cliente", true);
     if (!resolved.firstMessageAt || !resolved.lastMessageAt) {
       return { status: "skipped", reason: "sem_mensagens" };
     }
@@ -447,7 +450,7 @@ export class SmclickIntegrationService {
     if (!chat.protocol) return;
 
     const messages = await this.smclickApi.getChatMessages(chat.protocol);
-    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente");
+    const resolved = resolveTranscriptMessages(messages, ticket.client_name || chat.contact?.name || "Cliente", true);
     if (!resolved.firstMessageAt || !resolved.lastMessageAt) return;
     const content = await this.renderTranscriptContent(ticket.id, resolved, true);
 
