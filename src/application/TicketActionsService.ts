@@ -72,13 +72,45 @@ export class TicketActionsService {
       throw Object.assign(new Error("Campo obrigatorio: ticketId."), { status: 400 });
     }
 
-    const entries = await this.timeEntries.findByTicket(ticketId);
-    const totalNormalHours = Math.round(entries.reduce((sum, e) => sum + (e.normal_hours || 0), 0) * 100) / 100;
-    const totalExtraHours = Math.round(entries.reduce((sum, e) => sum + (e.extra_hours || 0), 0) * 100) / 100;
+    const ticket = await this.tickets.findById(ticketId);
+    const { totalNormalHours, totalExtraHours } = await this.computeAndStoreHours(ticketId, ticket);
 
-    await this.tickets.update(ticketId, { total_normal_hours: totalNormalHours, total_extra_hours: totalExtraHours });
+    // Horas de um atendimento vinculado a um projeto de Implantacao (ver
+    // designateAsImplantacao) "sobem" pro total do ticket pai - pedido do
+    // usuario em 2026-09-04: o historico do projeto de Implantacao precisa
+    // refletir tambem as horas do atendimento (ex: SM Click) linkado a ele.
+    if (ticket?.parent_ticket_id) {
+      await this.computeAndStoreHours(ticket.parent_ticket_id);
+    }
 
     return { ticketId, totalNormalHours, totalExtraHours };
+  }
+
+  /**
+   * Calcula e grava o total de horas de um ticket: soma dos seus proprios
+   * Registros (TimeEntry) +, se for um ticket de Implantacao, o total ja
+   * calculado de cada ticket filho vinculado a ele (parent_ticket_id) - so
+   * um nivel, nao segue filho-de-filho. A consulta extra de filhos so roda
+   * pra tickets de Implantacao (main_type) porque so eles podem ser "pai" -
+   * evita pagar essa query extra em TODO salvamento de Registro do sistema,
+   * ja que a grande maioria dos tickets (Suporte) nunca tem filho.
+   */
+  private async computeAndStoreHours(ticketId: string, ticket?: TicketRecord | null): Promise<{ totalNormalHours: number; totalExtraHours: number }> {
+    const resolvedTicket = ticket === undefined ? await this.tickets.findById(ticketId) : ticket;
+    const entries = await this.timeEntries.findByTicket(ticketId);
+    let normal = entries.reduce((sum, e) => sum + (e.normal_hours || 0), 0);
+    let extra = entries.reduce((sum, e) => sum + (e.extra_hours || 0), 0);
+
+    if (resolvedTicket?.main_type === "implantacao") {
+      const children = await this.tickets.findMany({ parent_ticket_id: ticketId });
+      normal += children.reduce((sum, t) => sum + (t.total_normal_hours || 0), 0);
+      extra += children.reduce((sum, t) => sum + (t.total_extra_hours || 0), 0);
+    }
+
+    const totalNormalHours = Math.round(normal * 100) / 100;
+    const totalExtraHours = Math.round(extra * 100) / 100;
+    await this.tickets.update(ticketId, { total_normal_hours: totalNormalHours, total_extra_hours: totalExtraHours });
+    return { totalNormalHours, totalExtraHours };
   }
 
   async updateStatus(command: UpdateTicketStatusCommand, actor: TicketActor): Promise<UpdateTicketStatusResult> {
@@ -258,6 +290,12 @@ export class TicketActionsService {
       parent_ticket_number: parent.ticket_number,
       parent_ticket_title: parent.title,
     });
+
+    // As horas que esse ticket ja tinha registradas (ex: Registro do
+    // historico do WhatsApp) precisam refletir no total do pai imediatamente
+    // ao vincular, sem esperar o proximo Registro ser salvo - pedido do
+    // usuario em 2026-09-04.
+    await this.recomputeHours(ticket.id);
 
     await this.ticketEvents.create({
       ticket_id: ticket.id,

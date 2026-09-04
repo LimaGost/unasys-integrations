@@ -274,31 +274,4 @@ router.post(
   })
 );
 
-/**
- * Chamado pelo frontend (ActivityPanel.jsx) logo apos salvar um Registro com
- * o historico do WhatsApp (botao "Buscar conversa do WhatsApp") - fecha o
- * ticket smclick se o atendimento ja estiver finalizado na SM Click. Pedido
- * do usuario em 2026-09-04: o gatilho de fechamento e o salvamento do
- * Registro com o historico, nao mais um bloqueio generico no update-status.
- * Ver SmclickIntegrationService.closeTicketIfSmclickFinished.
- */
-router.post(
-  "/smclick-close-if-finished",
-  asyncHandler(async (req: Request, res: Response) => {
-    if (!requireToken(req, res)) return;
-
-    const ticketId = typeof req.body?.ticket_id === "string" ? req.body.ticket_id : "";
-    const actorEmail = typeof req.body?.actor_email === "string" ? req.body.actor_email : "";
-    const actorName = typeof req.body?.actor_name === "string" && req.body.actor_name ? req.body.actor_name : actorEmail;
-
-    if (!ticketId || !actorEmail) {
-      res.status(400).json({ error: "BadRequest", message: "Campos obrigatorios: ticket_id, actor_email." });
-      return;
-    }
-
-    const result = await smclickIntegrationService.closeTicketIfSmclickFinished(ticketId, { email: actorEmail, name: actorName });
-    res.status(200).json(result);
-  })
-);
-
 export default router;
